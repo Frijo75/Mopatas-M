@@ -1,7 +1,2 @@
 Flask
-sqlite3
-request
-uuid
-math
-jsonify
 gunicorn
