@@ -239,7 +239,7 @@ def transaction_endpoint():
     numero_envoyeur = data.get('numero_envoyeur')
     montant = data.get('montant')
     pass_word = data.get('pass_word')
-    transaction_type = data.get('type')
+    transaction_type = data.get('transaction_type')
     code_paie = data.get('code_paie')
     id_paie = data.get('id_paie')
     print(f"Envoyeur: {numero_envoyeur}, Destinataire: {numero_destinataire}, Montant: {montant}, Type: {transaction_type}")
