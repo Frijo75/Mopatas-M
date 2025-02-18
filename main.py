@@ -1,36 +1,71 @@
 from flask import Flask, request, jsonify
-import mysql.connector
-import uuid
-import math
-import setup_db.py
+import sqlite3, uuid, math
+import json
+
 app = Flask(__name__)
 
-# --- Connexion à la base de données MySQL ---
+#####################################
+# Base de données SQLite et initialisation
+#####################################
 def get_db_connection():
-    conn = mysql.connector.connect(
-        host='localhost',       # modifiez selon votre configuration
-        user='root',            # modifiez selon votre configuration
-        password='password',    # modifiez selon votre configuration
-        database='mopatas'
-    )
+    conn = sqlite3.connect('mopatas.db')
+    conn.row_factory = sqlite3.Row
     return conn
 
-# --- Fonctions utilitaires pour la gestion des utilisateurs ---
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Table des utilisateurs
+    cursor.execute('''
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nom TEXT NOT NULL,
+        numero TEXT UNIQUE NOT NULL,
+        pass_word TEXT NOT NULL,
+        solde REAL NOT NULL
+      )
+    ''')
+    # Table des transactions
+    cursor.execute('''
+      CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        numero_envoyeur TEXT NOT NULL,
+        numero_destinataire TEXT NOT NULL,
+        montant REAL NOT NULL,
+        type TEXT NOT NULL,
+        code_session TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL
+      )
+    ''')
+    # Compte d'entreprise (une seule ligne)
+    cursor.execute('''
+      CREATE TABLE IF NOT EXISTS company_account (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        solde REAL NOT NULL
+      )
+    ''')
+    cursor.execute("SELECT COUNT(*) as count FROM company_account")
+    row = cursor.fetchone()
+    if row["count"] == 0:
+        cursor.execute("INSERT INTO company_account (solde) VALUES (?)", (0.0,))
+    conn.commit()
+    conn.close()
 
+#####################################
+# Fonctions utilitaires SQL
+#####################################
 def insert_user(nom, numero, pass_word):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO users (nom, numero, pass_word, solde) VALUES (%s, %s, %s, %s)",
-        (nom, numero, pass_word, 0.0)
-    )
+    cursor.execute("INSERT INTO users (nom, numero, pass_word, solde) VALUES (?, ?, ?, ?)",
+                   (nom, numero, pass_word, 0.0))
     conn.commit()
     conn.close()
 
 def get_user_by_number(numero):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM users WHERE numero = %s", (numero,))
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE numero = ?", (numero,))
     user = cursor.fetchone()
     conn.close()
     return user
@@ -38,102 +73,147 @@ def get_user_by_number(numero):
 def update_user_balance(numero, new_balance):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET solde = %s WHERE numero = %s", (new_balance, numero))
+    cursor.execute("UPDATE users SET solde = ? WHERE numero = ?", (new_balance, numero))
     conn.commit()
     conn.close()
 
-# --- Fonction pour mettre à jour le compte entreprise ---
-def update_company_balance(amount):
+def update_company_account(amount):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE company SET solde = solde + %s", (amount,))
+    cursor.execute("UPDATE company_account SET solde = solde + ? WHERE id = 1", (amount,))
     conn.commit()
     conn.close()
 
-# --- Fonction de calcul des frais ---
-def calculate_fee(montant):
+def insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+      INSERT INTO transactions (numero_envoyeur, numero_destinataire, montant, type, code_session, status)
+      VALUES (?, ?, ?, ?, ?, ?)
+    """, (numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, 'pending'))
+    conn.commit()
+    conn.close()
+
+def validate_transaction(code_session):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM transactions WHERE code_session = ? AND status = 'pending'", (code_session,))
+    transaction = cursor.fetchone()
+    if transaction:
+        cursor.execute("UPDATE transactions SET status = 'completed' WHERE code_session = ?", (code_session,))
+        conn.commit()
+        conn.close()
+        return transaction
+    conn.close()
+    return None
+
+def generate_session_code():
+    return str(uuid.uuid4())[:8]
+
+#####################################
+# Calcul des frais (interpolation)
+#####################################
+def calculate_fees(montant, transaction_type):
+    # Pour 'envoi', pas de frais
+    if transaction_type == 'envoi':
+        return 0
+    fee = 0
     if montant <= 20000:
         fee = montant * 0.05
     elif montant <= 100000:
-        fee = montant * 0.035
-    elif montant <= 200000:
-        fee = montant * 0.03
+        # Taux linéaire entre 5% et 3,5%
+        rate = 0.05 - (montant - 20000) * ((0.05 - 0.035) / (100000 - 20000))
+        fee = montant * rate
     elif montant <= 1000000:
-        fee = montant * 0.015
+        # Taux linéaire entre 3% et 1,5%
+        rate = 0.03 - (montant - 200000) * ((0.03 - 0.015) / (1000000 - 200000))
+        fee = montant * rate
     else:
         fee = montant * 0.01
     return fee
 
-# --- Génération d'un code de session unique ---
-def generate_session_code():
-    return str(uuid.uuid4())[:8]
+#####################################
+# Traitement de la transaction
+#####################################
+def process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_paie=None, id_paie=None):
+    sender = get_user_by_number(numero_envoyeur)
+    if not sender:
+        return {'error': 'Envoyeur non trouvé'}, 400
 
-# --- Insertion d'une transaction en attente ---
-def insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, extra_data=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO transactions (numero_envoyeur, numero_destinataire, montant, type, code_session, status, extra_data)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, 'pending', extra_data))
-    conn.commit()
-    conn.close()
+    sender_balance = sender['solde']
+    montant = float(montant)
+    montant = round(montant)  # montant arrondi
+    fee = calculate_fees(montant, transaction_type)
+    total_debit = montant + fee
 
-# --- Exécution de la transaction à la confirmation ---
-def complete_transaction(code_session):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM transactions WHERE code_session = %s AND status = %s", (code_session, 'pending'))
-    transaction = cursor.fetchone()
-    if not transaction:
-        conn.close()
-        return {'error': 'Transaction non trouvée ou déjà confirmée'}
-    
-    sender = get_user_by_number(transaction['numero_envoyeur'])
-    recipient = get_user_by_number(transaction['numero_destinataire'])
-    if not sender or not recipient:
-        conn.close()
-        return {'error': 'Utilisateur introuvable'}
+    if transaction_type in ['retrait']:
+        if sender_balance < total_debit:
+            return {'error': 'Solde insuffisant pour effectuer la transaction'}, 400
+        new_sender_balance = sender_balance - total_debit
+        update_user_balance(numero_envoyeur, new_sender_balance)
+        # Pour retrait, le destinataire est fourni directement
+        recipient = get_user_by_number(numero_destinataire)
+        if recipient:
+            bonus = fee * 0.2
+            new_recipient_balance = recipient['solde'] + bonus
+            update_user_balance(numero_destinataire, new_recipient_balance)
+            update_company_account(fee - bonus)
+        return {'message': 'Transaction de retrait réussie', 'new_balance': new_sender_balance}, 200
 
-    montant = transaction['montant']
-    trans_type = transaction['type']
+    elif transaction_type == 'envoi':
+        if sender_balance < montant:
+            return {'error': 'Solde insuffisant pour effectuer l\'envoi'}, 400
+        new_sender_balance = sender_balance - montant
+        update_user_balance(numero_envoyeur, new_sender_balance)
+        recipient = get_user_by_number(numero_destinataire)
+        if recipient:
+            new_recipient_balance = recipient['solde'] + montant
+            update_user_balance(numero_destinataire, new_recipient_balance)
+        return {'message': 'Envoi réussi', 'new_balance': new_sender_balance}, 200
 
-    # Pour retrait, liquider, payer : frais s'appliquent
-    if trans_type in ['retrait', 'liquider', 'payer']:
-        fee = calculate_fee(montant)
-        required = montant + fee
-        if sender['solde'] < required:
-            conn.close()
-            return {'error': 'Solde insuffisant pour la transaction avec frais'}
+    elif transaction_type in ['liquider', 'paie']:
+        # Pour liquider/payer, numero_destinataire est au format "destinataire_phone;code_paie;id_paie"
+        parts = numero_destinataire.split(';')
+        if len(parts) < 3:
+            return {'error': 'Format invalide pour liquider/payer'}, 400
+        destinataire_phone = parts[0].strip()  # On récupère la clause 0 qui correspond au numéro du destinataire
+        recipient = get_user_by_number(destinataire_phone)
+        if not recipient:
+            return {'error': 'Destinataire non trouvé'}, 400
 
-        new_sender_balance = sender['solde'] - required
-        # 20% des frais sont crédités au destinataire, 80% vont au compte entreprise
-        recipient_credit = montant + (fee * 0.2)
-        new_recipient_balance = recipient['solde'] + recipient_credit
-        update_user_balance(sender['numero'], new_sender_balance)
-        update_user_balance(recipient['numero'], new_recipient_balance)
-        update_company_balance(fee * 0.8)
-    elif trans_type == 'envoi':
-        if sender['solde'] < montant:
-            conn.close()
-            return {'error': 'Solde insuffisant pour l\'envoi'}
-        new_sender_balance = sender['solde'] - montant
-        new_recipient_balance = recipient['solde'] + montant
-        update_user_balance(sender['numero'], new_sender_balance)
-        update_user_balance(recipient['numero'], new_recipient_balance)
+        # Vérification du code de paiement et ID (si fournis dans la requête)
+        code_paie_received = parts[1].strip()
+        id_paie_received = parts[2].strip()
+        if code_paie and code_paie != code_paie_received:
+            return {'error': 'Code de paiement invalide'}, 400
+        if id_paie and id_paie != id_paie_received:
+            return {'error': 'ID de paiement invalide'}, 400
+
+        if sender_balance < total_debit:
+            return {'error': 'Solde insuffisant pour effectuer la transaction'}, 400
+        new_sender_balance = sender_balance - total_debit
+        update_user_balance(numero_envoyeur, new_sender_balance)
+        bonus = fee * 0.2
+        new_recipient_balance = recipient['solde'] + bonus
+        update_user_balance(destinataire_phone, new_recipient_balance)
+        update_company_account(fee - bonus)
+        return {'message': 'Transaction de liquider/payer réussie', 'new_balance': new_sender_balance}, 200
+
     else:
-        conn.close()
-        return {'error': 'Type de transaction inconnu'}
+        return {'error': 'Type de transaction inconnu'}, 400
 
-    # Marquer la transaction comme complétée
-    cursor.execute("UPDATE transactions SET status = %s WHERE code_session = %s", ('completed', code_session))
-    conn.commit()
-    conn.close()
-    return {'message': 'Transaction complétée avec succès'}
+#####################################
+# Endpoints
+#####################################
 
-# --- Endpoint d'inscription ---
+# Route de test
+@app.route('/test', methods=['GET'])
+def test_endpoint():
+    return jsonify({'message': 'L\'API fonctionne correctement!'}), 200
+
+# Inscription
 @app.route('/inscription', methods=['POST'])
-def api_inscription():
+def inscription_endpoint():
     data = request.get_json()
     nom = data.get('nom')
     pass_word = data.get('pass_word')
@@ -148,76 +228,69 @@ def api_inscription():
     insert_user(nom, numero, pass_word)
     return jsonify({'message': 'Inscription réussie', 'numero': numero}), 201
 
-# --- Endpoint de demande de transaction ---
+# Demande de transaction : génère un code de session et enregistre la transaction en attente
 @app.route('/transaction', methods=['POST'])
-def api_transaction():
+def transaction_endpoint():
     data = request.get_json()
+    numero_destinataire = data.get('numero_destinataire')
     numero_envoyeur = data.get('numero_envoyeur')
     montant = data.get('montant')
     pass_word = data.get('pass_word')
-    transaction_type = data.get('type')  # retrait, envoi, liquider, payer
-    destinataire_field = data.get('destinateur')  # Pour retrait/envoi: numéro; pour liquider/payer: "code_paie;id_paie;destinataire"
-    
-    if not numero_envoyeur or not montant or not transaction_type:
-        return jsonify({'error': 'Tous les champs obligatoires doivent être remplis'}), 400
+    transaction_type = data.get('type')
+    code_paie = data.get('code_paie')
+    id_paie = data.get('id_paie')
 
-    try:
-        montant = int(montant)
-    except ValueError:
-        return jsonify({'error': 'Le montant doit être un nombre entier'}), 400
+    if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
+        return jsonify({'error': 'Tous les champs doivent être remplis'}), 400
 
-    # Vérifier l'envoyeur et son mot de passe
     sender = get_user_by_number(numero_envoyeur)
-    if not sender:
-        return jsonify({'error': 'Envoyeur non trouvé'}), 400
-    if sender['pass_word'] != pass_word:
-        return jsonify({'error': 'Mot de passe incorrect'}), 400
+    if not sender or sender['pass_word'] != pass_word:
+        return jsonify({'error': 'Mot de passe incorrect ou utilisateur non trouvé'}), 400
 
-    # Pour retrait et envoi, le destinataire est directement donné
-    # Pour liquider et payer, le champ destinateur contient "code_paie;id_paie;destinataire"
-    numero_destinataire = None
-    extra_data = None
-    if transaction_type in ['retrait', 'envoi']:
-        numero_destinataire = destinataire_field
-    elif transaction_type in ['liquider', 'payer']:
-        parts = destinataire_field.split(';')
-        if len(parts) != 3:
-            return jsonify({'error': 'Pour liquider ou payer, le champ destinateur doit contenir "code_paie;id_paie;destinataire"'}), 400
-        code_paie = parts[0].strip()
-        id_paie = parts[1].strip()
-        numero_destinataire = parts[2].strip()
-        extra_data = f"code_paie:{code_paie}; id_paie:{id_paie}"
-    else:
-        return jsonify({'error': 'Type de transaction inconnu'}), 400
-
-    # Vérifier que le destinataire existe
-    recipient = get_user_by_number(numero_destinataire)
-    if not recipient:
-        return jsonify({'error': 'Destinataire non trouvé'}), 400
-
-    # Générer un code de session unique pour la transaction
+    # Générer un code de session unique
     code_session = generate_session_code()
+    # Enregistrer la transaction en statut "pending"
+    insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
 
-    # Enregistrer la transaction avec statut "pending"
-    insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, extra_data)
+    # Récupérer le nom du destinataire pour affichage
+    recipient_name = None
+    if transaction_type in ['retrait', 'envoi']:
+        recipient = get_user_by_number(numero_destinataire)
+        recipient_name = recipient['nom'] if recipient else "Inconnu"
+    elif transaction_type in ['liquider', 'paie']:
+        # Pour liquider/payer, on récupère la clause 0 qui correspond au numéro du destinataire
+        parts = numero_destinataire.split(';')
+        if len(parts) < 3:
+            return jsonify({'error': 'Format invalide pour liquider/payer'}), 400
+        destinataire_phone = parts[0].strip()
+        recipient = get_user_by_number(destinataire_phone)
+        recipient_name = recipient['nom'] if recipient else "Inconnu"
 
-    # Envoyer un message de confirmation au client
-    confirmation_message = f"Vous demandez une transaction de {montant} FC vers {recipient['nom']}. " \
-                           f"Confirmez-vous ? Votre code de session est: {code_session}"
-    return jsonify({'message': confirmation_message}), 200
+    confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ?"
+    # Retourner le message de confirmation ainsi que le code de session pour la confirmation
+    return jsonify({'message': confirmation_message, 'code_session': code_session}), 200
 
-# --- Endpoint de confirmation de transaction ---
+# Confirmation de transaction : l'utilisateur envoie le code de session pour valider la transaction
 @app.route('/confirm_transaction', methods=['POST'])
-def api_confirm_transaction():
+def confirm_transaction_endpoint():
     data = request.get_json()
     code_session = data.get('code_session')
     if not code_session:
         return jsonify({'error': 'Le code de session est requis'}), 400
 
-    result = complete_transaction(code_session)
-    if 'error' in result:
-        return jsonify(result), 400
-    return jsonify(result), 200
+    # Valider la transaction (passer de pending à completed) et récupérer ses détails
+    transaction_data = validate_transaction(code_session)
+    if transaction_data is None:
+        return jsonify({'error': 'Code de session invalide ou transaction déjà confirmée'}), 400
+
+    numero_envoyeur = transaction_data['numero_envoyeur']
+    numero_destinataire = transaction_data['numero_destinataire']
+    montant = transaction_data['montant']
+    transaction_type = transaction_data['type']
+
+    result, status = process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type)
+    return jsonify(result), status
 
 if __name__ == '__main__':
+    init_db()  # Initialise la base de données et crée les tables si nécessaire
     app.run(debug=True)
