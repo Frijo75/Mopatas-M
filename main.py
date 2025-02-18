@@ -55,11 +55,11 @@ def init_db():
 #####################################
 # Fonctions utilitaires SQL
 #####################################
-def insert_user(nom, numero, pass_word, type_compte="standard"):
+def insert_user(nom, numero, pass_word, type_compte="standard", solde= 0.0):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT INTO users (nom, numero, pass_word, solde, type_compte) VALUES (?, ?, ?, ?, ?)",
-                   (nom, numero, pass_word, 0.0, type_compte))
+                   (nom, numero, pass_word, solde, type_compte))
     conn.commit()
     conn.close()
 
@@ -234,15 +234,16 @@ def inscription_endpoint():
     nom = data.get('nom')
     pass_word = data.get('pass_word')
     numero = data.get('numero')
+    montant = data.get('montant', 0.0)
     type_compte = data.get('type_compte', 'standard')  # Optionnel, default 'standard'
 
     if not nom or not pass_word or not numero:
         return jsonify({'error': 'Tous les champs (nom, pass_word, numero) doivent être remplis'}), 400
-
+   
     if get_user_by_number(numero):
         return jsonify({'error': 'Numéro déjà inscrit'}), 400
 
-    insert_user(nom, numero, pass_word, type_compte)
+    insert_user(nom, numero, pass_word, type_compte, montant)
     return jsonify({'message': 'Inscription réussie', 'numero': numero, 'type_compte': type_compte}), 201
 
 # Demande de transaction : génère un code de session et enregistre la transaction en attente
