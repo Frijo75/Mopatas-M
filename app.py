@@ -198,6 +198,9 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
 #####################################
 # Endpoints
 #####################################
+@app.route('/test', methods=['GET'])
+def test_endpoint():
+    return jsonify({'message': 'L\'API fonctionne correctement!'}), 200
 
 # Inscription
 @app.route('/inscription', methods=['POST'])
