@@ -130,6 +130,10 @@ def complete_transaction(code_session):
     conn.commit()
     conn.close()
     return {'message': 'Transaction complétée avec succès'}
+    
+@app.route('/start', methods=['GET'])
+def health_check():
+    return {"status": "healthy"}, 200
 
 # --- Endpoint d'inscription ---
 @app.route('/inscription', methods=['POST'])
