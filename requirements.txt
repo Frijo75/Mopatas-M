@@ -1,4 +1,7 @@
 Flask
-mysql-connector-python
-mysql-connector
+sqlite3
+request
+uuid
+math
+jsonify
 gunicorn
