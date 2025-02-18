@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import sqlite3, uuid, math
 import json
+import os
 
 app = Flask(__name__)
 
@@ -8,7 +9,8 @@ app = Flask(__name__)
 # Base de données SQLite et initialisation
 #####################################
 def get_db_connection():
-    conn = sqlite3.connect('mopatas.db')
+    DATABASE = os.path.join(os.getcwd(), "my_database.sqlite3")
+    conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
 
