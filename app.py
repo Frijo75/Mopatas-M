@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import mysql.connector
 import uuid
 import math
-
+import setup_db
 app = Flask(__name__)
 
 # --- Connexion à la base de données MySQL ---
