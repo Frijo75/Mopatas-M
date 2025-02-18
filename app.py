@@ -234,6 +234,7 @@ def inscription_endpoint():
 @app.route('/transaction', methods=['POST'])
 def transaction_endpoint():
     data = request.get_json()
+    print("Données reçues :", data)
     numero_destinataire = data.get('numero_destinataire')
     numero_envoyeur = data.get('numero_envoyeur')
     montant = data.get('montant')
@@ -241,7 +242,7 @@ def transaction_endpoint():
     transaction_type = data.get('type')
     code_paie = data.get('code_paie')
     id_paie = data.get('id_paie')
-
+    print(f"Envoyeur: {numero_envoyeur}, Destinataire: {numero_destinataire}, Montant: {montant}, Type: {transaction_type}")
     if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
         return jsonify({'error': 'Tous les champs doivent être remplis'}), 400
 
