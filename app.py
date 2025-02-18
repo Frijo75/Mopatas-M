@@ -1,12 +1,12 @@
 from flask import Flask, request, jsonify
-import sqlite3, uuid, json
-import math
+import sqlite3, uuid, math
+import json
 
 app = Flask(__name__)
 
-#########################
-# Base de données SQLite
-#########################
+#####################################
+# Base de données SQLite et initialisation
+#####################################
 def get_db_connection():
     conn = sqlite3.connect('mopatas.db')
     conn.row_factory = sqlite3.Row
@@ -51,9 +51,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-##############################
+#####################################
 # Fonctions utilitaires SQL
-##############################
+#####################################
 def insert_user(nom, numero, pass_word):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -117,7 +117,6 @@ def calculate_fees(montant, transaction_type):
     # Pour 'envoi', pas de frais
     if transaction_type == 'envoi':
         return 0
-    
     fee = 0
     if montant <= 20000:
         fee = montant * 0.05
@@ -147,41 +146,20 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
     fee = calculate_fees(montant, transaction_type)
     total_debit = montant + fee
 
-    # Pour retrait, liquider, paie : vérifier que le solde couvre montant + frais
-    if transaction_type in ['retrait', 'liquider', 'paie']:
+    if transaction_type in ['retrait']:
         if sender_balance < total_debit:
             return {'error': 'Solde insuffisant pour effectuer la transaction'}, 400
-        # Débit du solde de l'envoyeur
         new_sender_balance = sender_balance - total_debit
         update_user_balance(numero_envoyeur, new_sender_balance)
+        # Pour retrait, le destinataire est fourni directement
+        recipient = get_user_by_number(numero_destinataire)
+        if recipient:
+            bonus = fee * 0.2
+            new_recipient_balance = recipient['solde'] + bonus
+            update_user_balance(numero_destinataire, new_recipient_balance)
+            update_company_account(fee - bonus)
+        return {'message': 'Transaction de retrait réussie', 'new_balance': new_sender_balance}, 200
 
-        # Pour retrait : le destinataire est directement fourni
-        if transaction_type == 'retrait':
-            recipient = get_user_by_number(numero_destinataire)
-            if recipient:
-                bonus = fee * 0.2
-                new_recipient_balance = recipient['solde'] + bonus
-                update_user_balance(numero_destinataire, new_recipient_balance)
-                update_company_account(fee - bonus)
-        # Pour liquider et payer : numero_destinataire contient "code_paie;id_paie;destinateur"
-        elif transaction_type in ['liquider', 'paie']:
-            parts = numero_destinataire.split(';')
-            if len(parts) < 3:
-                return {'error': 'Format invalide pour liquider/payer'}, 400
-            code_paie_received = parts[0].strip()
-            id_paie_received = parts[1].strip()
-            destinataire_real = parts[2].strip()
-            if code_paie and code_paie != code_paie_received:
-                return {'error': 'Code de paiement invalide'}, 400
-            if id_paie and id_paie != id_paie_received:
-                return {'error': 'ID de paiement invalide'}, 400
-            recipient = get_user_by_number(destinataire_real)
-            if recipient:
-                bonus = fee * 0.2
-                new_recipient_balance = recipient['solde'] + bonus
-                update_user_balance(destinataire_real, new_recipient_balance)
-                update_company_account(fee - bonus)
-        return {'message': 'Transaction réussie', 'new_balance': new_sender_balance}, 200
     elif transaction_type == 'envoi':
         if sender_balance < montant:
             return {'error': 'Solde insuffisant pour effectuer l\'envoi'}, 400
@@ -192,12 +170,43 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             new_recipient_balance = recipient['solde'] + montant
             update_user_balance(numero_destinataire, new_recipient_balance)
         return {'message': 'Envoi réussi', 'new_balance': new_sender_balance}, 200
+
+    elif transaction_type in ['liquider', 'paie']:
+        # Pour liquider/payer, numero_destinataire est au format "destinataire_phone;code_paie;id_paie"
+        parts = numero_destinataire.split(';')
+        if len(parts) < 3:
+            return {'error': 'Format invalide pour liquider/payer'}, 400
+        destinataire_phone = parts[0].strip()  # On récupère la clause 0 qui correspond au numéro du destinataire
+        recipient = get_user_by_number(destinataire_phone)
+        if not recipient:
+            return {'error': 'Destinataire non trouvé'}, 400
+
+        # Vérification du code de paiement et ID (si fournis dans la requête)
+        code_paie_received = parts[1].strip()
+        id_paie_received = parts[2].strip()
+        if code_paie and code_paie != code_paie_received:
+            return {'error': 'Code de paiement invalide'}, 400
+        if id_paie and id_paie != id_paie_received:
+            return {'error': 'ID de paiement invalide'}, 400
+
+        if sender_balance < total_debit:
+            return {'error': 'Solde insuffisant pour effectuer la transaction'}, 400
+        new_sender_balance = sender_balance - total_debit
+        update_user_balance(numero_envoyeur, new_sender_balance)
+        bonus = fee * 0.2
+        new_recipient_balance = recipient['solde'] + bonus
+        update_user_balance(destinataire_phone, new_recipient_balance)
+        update_company_account(fee - bonus)
+        return {'message': 'Transaction de liquider/payer réussie', 'new_balance': new_sender_balance}, 200
+
     else:
         return {'error': 'Type de transaction inconnu'}, 400
 
 #####################################
 # Endpoints
 #####################################
+
+# Route de test
 @app.route('/test', methods=['GET'])
 def test_endpoint():
     return jsonify({'message': 'L\'API fonctionne correctement!'}), 200
@@ -249,13 +258,17 @@ def transaction_endpoint():
         recipient = get_user_by_number(numero_destinataire)
         recipient_name = recipient['nom'] if recipient else "Inconnu"
     elif transaction_type in ['liquider', 'paie']:
+        # Pour liquider/payer, on récupère la clause 0 qui correspond au numéro du destinataire
         parts = numero_destinataire.split(';')
         if len(parts) < 3:
             return jsonify({'error': 'Format invalide pour liquider/payer'}), 400
-        recipient_name = parts[2].strip()
+        destinataire_phone = parts[0].strip()
+        recipient = get_user_by_number(destinataire_phone)
+        recipient_name = recipient['nom'] if recipient else "Inconnu"
 
-    confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ? Code de session: {code_session}"
-    return jsonify({'message': confirmation_message}), 200
+    confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ?"
+    # Retourner le message de confirmation ainsi que le code de session pour la confirmation
+    return jsonify({'message': confirmation_message, 'code_session': code_session}), 200
 
 # Confirmation de transaction : l'utilisateur envoie le code de session pour valider la transaction
 @app.route('/confirm_transaction', methods=['POST'])
