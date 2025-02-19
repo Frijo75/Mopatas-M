@@ -231,7 +231,7 @@ def test_endpoint():
     
     users = cursor.fetchall()
     conn.close()
-    if user:
+    if users:
         users_list = [{"nom": user["nom"], "numero": user["numero"], "solde": user["solde"], "type_compte": user["type_compte"]} for user in users]
         return jsonify(users_list), 200
     else :
