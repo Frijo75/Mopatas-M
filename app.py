@@ -246,7 +246,7 @@ def balance_endpoint():
 
     user = get_user_by_number(numero)
     if user :
-        users_list = [{ "message": f"Bonjour {user['nom']}, Merci d'utiliser notre sevice. Votre solde est de {user['sold']}!"}]
+        users_list = [{"solde": user['sold'], "message": f"Bonjour {user['nom']}, Merci d'utiliser notre sevice. Votre solde est de {user['sold']}!"}]
         return jsonify(users_list), 200
     else :
          return {'error': 'Echec de vérification de solde !'}, 400
