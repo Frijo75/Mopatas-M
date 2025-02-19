@@ -228,11 +228,15 @@ def test_endpoint():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT nom, numero, solde, type_compte FROM users")
+    
     users = cursor.fetchall()
     conn.close()
-
-    users_list = [{"nom": user["nom"], "numero": user["numero"], "solde": user["solde"], "type_compte": user["type_compte"]} for user in users]
-    return jsonify(users_list), 200
+    if user:
+        users_list = [{"nom": user["nom"], "numero": user["numero"], "solde": user["solde"], "type_compte": user["type_compte"]} for user in users]
+        return jsonify(users_list), 200
+    else :
+        users_list = [{"Statut": "L'API marche correctement !", "Etat": "Aucun enregistrement disponique !"}]
+        return jsonify(users_list), 200
 
 
 # Inscription
