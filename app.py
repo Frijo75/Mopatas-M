@@ -7,7 +7,7 @@ app = Flask(__name__)
 # Base de données SQLite et initialisation
 #####################################
 def get_db_connection():
-    DATABASE = os.path.join(os.getcwd(), "my_database.sqlite3")
+    DATABASE = os.path.join(os.getcwd(), "mopatas.db")
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
