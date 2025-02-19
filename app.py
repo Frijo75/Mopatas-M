@@ -1,7 +1,5 @@
 from flask import Flask, request, jsonify
-import sqlite3, uuid, math
-import json
-import os
+import sqlite3, uuid, math, os
 
 app = Flask(__name__)
 
@@ -17,14 +15,15 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Table des utilisateurs
+    # Table des utilisateurs avec colonne type_compte (default 'standard')
     cursor.execute('''
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nom TEXT NOT NULL,
         numero TEXT UNIQUE NOT NULL,
         pass_word TEXT NOT NULL,
-        solde REAL NOT NULL
+        solde REAL NOT NULL,
+        type_compte TEXT NOT NULL DEFAULT 'standard'
       )
     ''')
     # Table des transactions
@@ -56,11 +55,11 @@ def init_db():
 #####################################
 # Fonctions utilitaires SQL
 #####################################
-def insert_user(nom, numero, pass_word):
+def insert_user(nom, numero, pass_word, type_compte="standard", solde= 0.0):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO users (nom, numero, pass_word, solde) VALUES (?, ?, ?, ?)",
-                   (nom, numero, pass_word, 0.0))
+    cursor.execute("INSERT INTO users (nom, numero, pass_word, solde, type_compte) VALUES (?, ?, ?, ?, ?)",
+                   (nom, numero, pass_word, solde, type_compte))
     conn.commit()
     conn.close()
 
@@ -116,8 +115,8 @@ def generate_session_code():
 # Calcul des frais (interpolation)
 #####################################
 def calculate_fees(montant, transaction_type):
-    # Pour 'envoi', pas de frais
-    if transaction_type == 'envoi':
+    # Pour 'envoi' et 'depot', pas de frais
+    if transaction_type in ['envoi', 'depot']:
         return 0
     fee = 0
     if montant <= 20000:
@@ -148,7 +147,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
     fee = calculate_fees(montant, transaction_type)
     total_debit = montant + fee
 
-    if transaction_type in ['retrait']:
+    if transaction_type == 'retrait':
         if sender_balance < total_debit:
             return {'error': 'Solde insuffisant pour effectuer la transaction'}, 400
         new_sender_balance = sender_balance - total_debit
@@ -183,7 +182,6 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         if not recipient:
             return {'error': 'Destinataire non trouvé'}, 400
 
-        # Vérification du code de paiement et ID (si fournis dans la requête)
         code_paie_received = parts[1].strip()
         id_paie_received = parts[2].strip()
         if code_paie and code_paie != code_paie_received:
@@ -201,6 +199,22 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         update_company_account(fee - bonus)
         return {'message': 'Transaction de liquider/payer réussie', 'new_balance': new_sender_balance}, 200
 
+    elif transaction_type == 'depot':
+        # Pour depot, le compte de l'envoyeur est celui de l'agent
+        # Vérifier que l'agent a un compte de type 'agent' ou 'premium'
+        if sender['type_compte'] not in ['agent', 'premium']:
+            return {'error': 'Le compte de l\'envoyeur n\'est pas un agent valide'}, 400
+        if sender_balance < montant:
+            return {'error': 'Solde insuffisant pour effectuer le dépôt'}, 400
+        new_sender_balance = sender_balance - montant
+        update_user_balance(numero_envoyeur, new_sender_balance)
+        # Ajout du montant au destinataire (utilisateur)
+        recipient = get_user_by_number(numero_destinataire)
+        if recipient:
+            new_recipient_balance = recipient['solde'] + montant
+            update_user_balance(numero_destinataire, new_recipient_balance)
+        return {'message': 'Dépôt réussi', 'new_balance': new_sender_balance}, 200
+
     else:
         return {'error': 'Type de transaction inconnu'}, 400
 
@@ -211,7 +225,15 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
 # Route de test
 @app.route('/test', methods=['GET'])
 def test_endpoint():
-    return jsonify({'message': 'L\'API fonctionne correctement!'}), 200
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT nom, numero, solde, type_compte FROM users")
+    users = cursor.fetchall()
+    conn.close()
+
+    users_list = [{"nom": user["nom"], "numero": user["numero"], "solde": user["solde"], "type_compte": user["type_compte"]} for user in users]
+    return jsonify(users_list), 200
+
 
 # Inscription
 @app.route('/inscription', methods=['POST'])
@@ -220,15 +242,17 @@ def inscription_endpoint():
     nom = data.get('nom')
     pass_word = data.get('pass_word')
     numero = data.get('numero')
+    montant = data.get('montant', 0.0)
+    type_compte = data.get('type_compte', 'standard')  # Optionnel, default 'standard'
 
     if not nom or not pass_word or not numero:
-        return jsonify({'error': 'Tous les champs doivent être remplis'}), 400
-
+        return jsonify({'error': 'Tous les champs (nom, pass_word, numero) doivent être remplis'}), 400
+   
     if get_user_by_number(numero):
         return jsonify({'error': 'Numéro déjà inscrit'}), 400
 
-    insert_user(nom, numero, pass_word)
-    return jsonify({'message': 'Inscription réussie', 'numero': numero}), 201
+    insert_user(nom, numero, pass_word, type_compte, montant)
+    return jsonify({'message': 'Inscription réussie', 'numero': numero, 'type_compte': type_compte}), 201
 
 # Demande de transaction : génère un code de session et enregistre la transaction en attente
 @app.route('/transaction', methods=['POST'])
@@ -257,7 +281,7 @@ def transaction_endpoint():
 
     # Récupérer le nom du destinataire pour affichage
     recipient_name = None
-    if transaction_type in ['retrait', 'envoi']:
+    if transaction_type in ['retrait', 'envoi', 'depot']:
         recipient = get_user_by_number(numero_destinataire)
         recipient_name = recipient['nom'] if recipient else "Inconnu"
     elif transaction_type in ['liquider', 'paie']:
