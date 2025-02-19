@@ -225,7 +225,15 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
 # Route de test
 @app.route('/test', methods=['GET'])
 def test_endpoint():
-    return jsonify({'message': 'L\'API fonctionne correctement!'}), 200
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT nom, numero, solde, type_compte FROM users")
+    users = cursor.fetchall()
+    conn.close()
+
+    users_list = [{"nom": user["nom"], "numero": user["numero"], "solde": user["solde"], "type_compte": user["type_compte"]} for user in users]
+    return jsonify(users_list), 200
+
 
 # Inscription
 @app.route('/inscription', methods=['POST'])
