@@ -238,6 +238,18 @@ def test_endpoint():
         users_list = [{"Statut": "L'API marche correctement !", "Etat": "Aucun enregistrement disponique !"}]
         return jsonify(users_list), 200
 
+# Route de test
+@app.route('/balance', methods=['POST'])
+def balance_endpoint():
+    data = request.get_json()
+    numero = data.get('numero')
+
+    user = get_user_by_number(numero)
+    if user :
+        users_list = [{ "message": f"Bonjour {user['nom']}, Merci d'utiliser notre sevice. Votre solde est de {user['sold']}!"}]
+        return jsonify(users_list), 200
+    else :
+         return {'error': 'Echec de vérification de solde !'}, 400
 
 # Inscription
 @app.route('/inscription', methods=['POST'])
