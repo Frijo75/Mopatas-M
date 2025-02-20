@@ -26,7 +26,7 @@ def init_db():
         type_compte TEXT NOT NULL DEFAULT 'standard'
       )
     ''')
-    # Table des transactions
+    # Table des transactions, avec colonne transaction_hash pour la sécurité (peut être NULL)
     cursor.execute('''
       CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,10 +35,11 @@ def init_db():
         montant REAL NOT NULL,
         type TEXT NOT NULL,
         code_session TEXT UNIQUE NOT NULL,
-        status TEXT NOT NULL
+        status TEXT NOT NULL,
+        transaction_hash TEXT
       )
     ''')
-    # Compte d'entreprise (une seule ligne)
+    # Table du compte d'entreprise (une seule ligne)
     cursor.execute('''
       CREATE TABLE IF NOT EXISTS company_account (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,13 +50,23 @@ def init_db():
     row = cursor.fetchone()
     if row["count"] == 0:
         cursor.execute("INSERT INTO company_account (solde) VALUES (?)", (0.0,))
+    
+    # Table premium_services pour enregistrer les transactions de type liquider/paie
+    cursor.execute('''
+      CREATE TABLE IF NOT EXISTS premium_services (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_paiement TEXT NOT NULL,
+        id_payeur TEXT NOT NULL,
+        transaction_hash TEXT NOT NULL
+      )
+    ''')
     conn.commit()
     conn.close()
 
 #####################################
 # Fonctions utilitaires SQL
 #####################################
-def insert_user(nom, numero, pass_word, type_compte="standard", solde= 0.0):
+def insert_user(nom, numero, pass_word, type_compte="standard", solde=0.0):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT INTO users (nom, numero, pass_word, solde, type_compte) VALUES (?, ?, ?, ?, ?)",
@@ -136,7 +147,7 @@ def calculate_fees(montant, transaction_type):
 #####################################
 # Traitement de la transaction
 #####################################
-def process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_paie=None, id_paie=None):
+def process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, code_paie=None, id_paie=None):
     sender = get_user_by_number(numero_envoyeur)
     if not sender:
         return {'error': 'Envoyeur non trouvé'}, 400
@@ -159,7 +170,14 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             new_recipient_balance = recipient['solde'] + bonus
             update_user_balance(numero_destinataire, new_recipient_balance)
             update_company_account(fee - bonus)
-        return {'message': 'Transaction de retrait réussie', 'new_balance': new_sender_balance}, 200
+        # Génération du hash de transaction
+        transaction_hash = str(uuid.uuid4())
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+        conn.commit()
+        conn.close()
+        return {'message': 'Transaction de retrait réussie', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     elif transaction_type == 'envoi':
         if sender_balance < montant:
@@ -170,20 +188,28 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         if recipient:
             new_recipient_balance = recipient['solde'] + montant
             update_user_balance(numero_destinataire, new_recipient_balance)
-        return {'message': 'Envoi réussi', 'new_balance': new_sender_balance}, 200
+        # Génération du hash de transaction
+        transaction_hash = str(uuid.uuid4())
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+        conn.commit()
+        conn.close()
+        return {'message': 'Envoi réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     elif transaction_type in ['liquider', 'paie']:
         # Pour liquider/payer, numero_destinataire est au format "destinataire_phone;code_paie;id_paie"
         parts = numero_destinataire.split(';')
         if len(parts) < 3:
             return {'error': 'Format invalide pour liquider/payer'}, 400
-        destinataire_phone = parts[0].strip()  # On récupère la clause 0 qui correspond au numéro du destinataire
+        destinataire_phone = parts[0].strip()  # numéro du destinataire
         recipient = get_user_by_number(destinataire_phone)
         if not recipient:
             return {'error': 'Destinataire non trouvé'}, 400
 
         code_paie_received = parts[1].strip()
         id_paie_received = parts[2].strip()
+        # Vérification des codes si fournis dans la requête
         if code_paie and code_paie != code_paie_received:
             return {'error': 'Code de paiement invalide'}, 400
         if id_paie and id_paie != id_paie_received:
@@ -197,23 +223,45 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         new_recipient_balance = recipient['solde'] + bonus
         update_user_balance(destinataire_phone, new_recipient_balance)
         update_company_account(fee - bonus)
-        return {'message': 'Transaction de liquider/payer réussie', 'new_balance': new_sender_balance}, 200
+
+        # Génération du hash de transaction pour sécuriser l'opération
+        transaction_hash = str(uuid.uuid4())
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+        conn.commit()
+        conn.close()
+
+        # Enregistrement dans la table premium_services
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO premium_services (id_paiement, id_payeur, transaction_hash) VALUES (?, ?, ?)",
+                       (code_paie_received, id_paie_received, transaction_hash))
+        conn.commit()
+        conn.close()
+
+        return {'message': 'Transaction de liquider/payer réussie', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     elif transaction_type == 'depot':
-        # Pour depot, le compte de l'envoyeur est celui de l'agent
-        # Vérifier que l'agent a un compte de type 'agent' ou 'premium'
+        # Pour depot, l'envoyeur doit être un agent ou premium
         if sender['type_compte'] not in ['agent', 'premium']:
             return {'error': 'Le compte de l\'envoyeur n\'est pas un agent valide'}, 400
         if sender_balance < montant:
             return {'error': 'Solde insuffisant pour effectuer le dépôt'}, 400
         new_sender_balance = sender_balance - montant
         update_user_balance(numero_envoyeur, new_sender_balance)
-        # Ajout du montant au destinataire (utilisateur)
         recipient = get_user_by_number(numero_destinataire)
         if recipient:
             new_recipient_balance = recipient['solde'] + montant
             update_user_balance(numero_destinataire, new_recipient_balance)
-        return {'message': 'Dépôt réussi', 'new_balance': new_sender_balance}, 200
+        # Génération du hash de transaction
+        transaction_hash = str(uuid.uuid4())
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+        conn.commit()
+        conn.close()
+        return {'message': 'Dépôt réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     else:
         return {'error': 'Type de transaction inconnu'}, 400
@@ -228,28 +276,48 @@ def test_endpoint():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT nom, numero, solde, type_compte FROM users")
-    
     users = cursor.fetchall()
     conn.close()
     if users:
         users_list = [{"nom": user["nom"], "numero": user["numero"], "solde": user["solde"], "type_compte": user["type_compte"]} for user in users]
         return jsonify(users_list), 200
-    else :
-        users_list = [{"Statut": "L'API marche correctement !", "Etat": "Aucun enregistrement disponique !"}]
+    else:
+        users_list = [{"Statut": "L'API marche correctement !", "Etat": "Aucun enregistrement disponible !"}]
         return jsonify(users_list), 200
 
-# Route de test
+# Endpoint balance classique
 @app.route('/balance', methods=['POST'])
 def balance_endpoint():
     data = request.get_json()
     numero = data.get('numero')
-
     user = get_user_by_number(numero)
-    if user :
-        users_list = [{"solde": user['sold'], "message": f"Bonjour {user['nom']}, Merci d'utiliser notre sevice. Votre solde est de {user['sold']}!"}]
-        return jsonify(users_list), 200
-    else :
-         return {'error': 'Echec de vérification de solde !'}, 400
+    if user:
+        return jsonify([{
+            "solde": user['solde'],
+            "message": f"Bonjour {user['nom']}, Merci d'utiliser notre service. Votre solde est de {user['solde']}!"
+        }]), 200
+    else:
+        return jsonify({'error': 'Echec de vérification de solde !'}), 400
+
+# Endpoint balance_pro qui renvoie aussi les données de la table premium_services pour l'utilisateur premium
+@app.route('/balance_pro', methods=['POST'])
+def balance_pro_endpoint():
+    data = request.get_json()
+    numero = data.get('numero')
+    user = get_user_by_number(numero)
+    if not user:
+        return jsonify({'error': 'Utilisateur non trouvé'}), 400
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id_paiement, id_payeur, transaction_hash FROM premium_services WHERE id_payeur = ?", (user['numero'],))
+    premium_services = cursor.fetchall()
+    conn.close()
+    premium_list = [{"id_paiement": row["id_paiement"], "id_payeur": row["id_payeur"], "transaction_hash": row["transaction_hash"]} for row in premium_services]
+    return jsonify({
+         "solde": user["solde"],
+         "message": f"Bonjour {user['nom']}, Votre solde est de {user['solde']}!",
+         "premium_services": premium_list
+    }), 200
 
 # Inscription
 @app.route('/inscription', methods=['POST'])
@@ -258,8 +326,10 @@ def inscription_endpoint():
     nom = data.get('nom')
     pass_word = data.get('pass_word')
     numero = data.get('numero')
-    montant = data.get('montant', 0.0)
-    type_compte = data.get('type_compte', 'standard')  # Optionnel, default 'standard'
+    solde = data.get('montant', 0.0)
+    type_compte = data.get('type_compte', 'standard')  # Default 'standard'
+    # Pour compte premium, l'API doit recevoir le code_entite
+    code_entite = data.get('code_entite')
 
     if not nom or not pass_word or not numero:
         return jsonify({'error': 'Tous les champs (nom, pass_word, numero) doivent être remplis'}), 400
@@ -267,7 +337,8 @@ def inscription_endpoint():
     if get_user_by_number(numero):
         return jsonify({'error': 'Numéro déjà inscrit'}), 400
 
-    insert_user(nom, numero, pass_word, type_compte, montant)
+    # Insérer l'utilisateur (vous pouvez stocker code_entite dans un champ supplémentaire si besoin)
+    insert_user(nom, numero, pass_word, type_compte, solde)
     return jsonify({'message': 'Inscription réussie', 'numero': numero, 'type_compte': type_compte}), 201
 
 # Demande de transaction : génère un code de session et enregistre la transaction en attente
@@ -280,8 +351,8 @@ def transaction_endpoint():
     montant = data.get('montant')
     pass_word = data.get('pass_word')
     transaction_type = data.get('transaction_type')
-    code_paie = data.get('code_paie')
-    id_paie = data.get('id_paie')
+    code_paie = data.get('code_paie')  # Pour liquider/payer
+    id_paie = data.get('id_paie')      # Pour liquider/payer
     print(f"Envoyeur: {numero_envoyeur}, Destinataire: {numero_destinataire}, Montant: {montant}, Type: {transaction_type}")
     if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
         return jsonify({'error': 'Tous les champs doivent être remplis'}), 400
@@ -301,7 +372,6 @@ def transaction_endpoint():
         recipient = get_user_by_number(numero_destinataire)
         recipient_name = recipient['nom'] if recipient else "Inconnu"
     elif transaction_type in ['liquider', 'paie']:
-        # Pour liquider/payer, on récupère la clause 0 qui correspond au numéro du destinataire
         parts = numero_destinataire.split(';')
         if len(parts) < 3:
             return jsonify({'error': 'Format invalide pour liquider/payer'}), 400
@@ -313,13 +383,16 @@ def transaction_endpoint():
     # Retourner le message de confirmation ainsi que le code de session pour la confirmation
     return jsonify({'message': confirmation_message, 'code_session': code_session}), 200
 
-# Confirmation de transaction : l'utilisateur envoie le code de session pour valider la transaction
+# Confirmation de transaction : l'utilisateur envoie le code de session (et pour liquider/payer, code_paie et id_paie) pour valider la transaction
 @app.route('/confirm_transaction', methods=['POST'])
 def confirm_transaction_endpoint():
     data = request.get_json()
     code_session = data.get('code_session')
     if not code_session:
         return jsonify({'error': 'Le code de session est requis'}), 400
+    # Pour liquider/payer, récupérer également code_paie et id_paie
+    code_paie = data.get('code_paie')
+    id_paie = data.get('id_paie')
 
     # Valider la transaction (passer de pending à completed) et récupérer ses détails
     transaction_data = validate_transaction(code_session)
@@ -331,7 +404,7 @@ def confirm_transaction_endpoint():
     montant = transaction_data['montant']
     transaction_type = transaction_data['type']
 
-    result, status = process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type)
+    result, status = process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, code_paie, id_paie)
     return jsonify(result), status
 
 if __name__ == '__main__':
