@@ -126,6 +126,12 @@ def update_user_balance(numero, new_balance):
     cursor.execute("UPDATE users SET solde = ? WHERE numero = ?", (new_balance, numero))
     conn.commit()
     conn.close()
+def update_user_code(numero, codeCompte):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET codeCompte = ? WHERE numero = ?", (codeCompte, numero))
+    conn.commit()
+    conn.close()
 
 def update_company_account(amount):
     """
@@ -418,8 +424,9 @@ def inscription_endpoint():
         solde = float(data.get('montant', 0.0))
         type_compte = data.get('type_compte', 'standard')
         code_entite = data.get('code_entite')
+
         # Vérification des champs obligatoires
-        if not nom or not pass_word or not numero:
+        if not nom and not data.get('allready_have') or not pass_word and not data.get('allready_have') or not numero and not data.get('allready_have') :
             return jsonify({'error': 'Tous les champs (nom, pass_word, numero) doivent être remplis'}), 400
         # Si le compte existe déjà et que l'agent souhaite l'initialiser
         if data.get('allready_have'):
@@ -434,6 +441,7 @@ def inscription_endpoint():
                 return jsonify({'error': 'Mot de passe incorrect'}), 400
             if user.get("codeCompte") != codeCompte_req:
                 return jsonify({'error': 'codeCompte invalide'}), 400
+            update_user_code(user['numero'],codeCompte_req)
             return jsonify({'message': 'Compte initialisé avec succès', 'codeCompte': codeCompte_req, 'nom': user['nom'], 'numero': user['numero'], 'solde': user['solde'], 'type_compte': user['type_compte']}), 200
         # Pour une nouvelle inscription, on vérifie si le compte est de type agent
         if type_compte == 'agent':
@@ -443,10 +451,8 @@ def inscription_endpoint():
             company = get_company_account()
             if company is None or company_pass_input != company["pass_word"]:
                 return jsonify({'error': 'Mot de passe company incorrect'}), 400
-            # L'agent doit fournir son codeCompte lors de l'inscription
-            agent_codeCompte = data.get('codeCompte')
-            if not agent_codeCompte:
-                return jsonify({'error': 'codeCompte requis pour l\'inscription d\'un agent'}), 400
+           
+            
         else:
             agent_codeCompte = None
         if get_user_by_number(numero):
