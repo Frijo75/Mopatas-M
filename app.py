@@ -39,7 +39,7 @@ def init_db():
         transaction_hash TEXT
       )
     ''')
-    # Table du compte d'entreprise (une seule ligne)
+    # Table du compte d'entreprise (une seule ligne) qui représente le float
     cursor.execute('''
       CREATE TABLE IF NOT EXISTS company_account (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +49,8 @@ def init_db():
     cursor.execute("SELECT COUNT(*) as count FROM company_account")
     row = cursor.fetchone()
     if row["count"] == 0:
-        cursor.execute("INSERT INTO company_account (solde) VALUES (?)", (0.0,))
+        # Par exemple, initialiser le float à 0 ou à une somme définie (ex: 2000000)
+        cursor.execute("INSERT INTO company_account (solde) VALUES (?)", (2000000.0,))
     
     # Table premium_services pour enregistrer les transactions de type liquider/paie
     cursor.execute('''
@@ -90,6 +91,11 @@ def update_user_balance(numero, new_balance):
     conn.close()
 
 def update_company_account(amount):
+    """
+    Met à jour le float de l’entreprise.
+    Pour un dépôt, on passe un montant négatif (le float diminue).
+    Pour un retrait, on passe un montant positif (le float augmente).
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE company_account SET solde = solde + ? WHERE id = 1", (amount,))
@@ -163,13 +169,15 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             return {'error': 'Solde insuffisant pour effectuer la transaction'}, 400
         new_sender_balance = sender_balance - total_debit
         update_user_balance(numero_envoyeur, new_sender_balance)
-        # Pour retrait, le destinataire est fourni directement
+        # Calcul du bonus et mise à jour du destinataire (par exemple, une commission sur retrait)
+        bonus = fee * 0.2
         recipient = get_user_by_number(numero_destinataire)
         if recipient:
-            bonus = fee * 0.2
             new_recipient_balance = recipient['solde'] + bonus
             update_user_balance(numero_destinataire, new_recipient_balance)
-            update_company_account(fee - bonus)
+        # Ici, en cas de retrait, on augmente le float :
+        # Le montant retiré (qui était auparavant une obligation) est annulé, et on ajoute les frais nets
+        update_company_account(montant + fee - bonus)
         # Génération du hash de transaction
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
@@ -188,17 +196,17 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         if recipient:
             new_recipient_balance = recipient['solde'] + montant
             update_user_balance(numero_destinataire, new_recipient_balance)
-        # Génération du hash de transaction
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
         conn.commit()
         conn.close()
+        # Pour un envoi, le float n'est pas impacté
         return {'message': 'Envoi réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     elif transaction_type in ['liquider', 'paie']:
-        # Pour liquider/payer, numero_destinataire est au format "destinataire_phone;code_paie;id_paie"
+        # Pour liquider/payer, numero_destinataire au format "destinataire_phone;code_paie;id_paie"
         parts = numero_destinataire.split(';')
         if len(parts) < 3:
             return {'error': 'Format invalide pour liquider/payer'}, 400
@@ -209,7 +217,6 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
 
         code_paie_received = parts[1].strip()
         id_paie_received = parts[2].strip()
-        # Vérification des codes si fournis dans la requête
         if code_paie and code_paie != code_paie_received:
             return {'error': 'Code de paiement invalide'}, 400
         if id_paie and id_paie != id_paie_received:
@@ -222,9 +229,8 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         bonus = fee * 0.2
         new_recipient_balance = recipient['solde'] + bonus
         update_user_balance(destinataire_phone, new_recipient_balance)
-        update_company_account(fee - bonus)
-
-        # Génération du hash de transaction pour sécuriser l'opération
+        # Pour liquider/payer (similaire à un retrait), on augmente le float du montant retiré
+        update_company_account(montant + fee - bonus)
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -254,7 +260,8 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         if recipient:
             new_recipient_balance = recipient['solde'] + montant
             update_user_balance(numero_destinataire, new_recipient_balance)
-        # Génération du hash de transaction
+        # Pour un dépôt, l'argent entrant crée une obligation : le float diminue
+        update_company_account(-montant)
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -337,7 +344,7 @@ def inscription_endpoint():
     if get_user_by_number(numero):
         return jsonify({'error': 'Numéro déjà inscrit'}), 400
 
-    # Insérer l'utilisateur (vous pouvez stocker code_entite dans un champ supplémentaire si besoin)
+    # Insérer l'utilisateur
     insert_user(nom, numero, pass_word, type_compte, solde)
     return jsonify({'message': 'Inscription réussie', 'numero': numero, 'type_compte': type_compte}), 201
 
