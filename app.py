@@ -442,7 +442,7 @@ def inscription_endpoint():
             if user.get("codeCompte") != codeCompte_req:
                 return jsonify({'error': 'codeCompte invalide'}), 400
             update_user_code(user['numero'],codeCompte_req)
-            return jsonify({'message': 'Compte initialisé avec succès', 'codeCompte': codeCompte_req, 'nom': user['nom'], 'numero': user['numero'], 'solde': user['solde'], 'type_compte': user['type_compte']}), 200
+            return jsonify({'message': 'Compte initialisé avec succès', 'nom': user['nom'], 'numero': user['numero'], 'solde': user['solde'], 'type_compte': user['type_compte']}), 200
         # Pour une nouvelle inscription, on vérifie si le compte est de type agent
         if type_compte == 'agent':
             company_pass_input = data.get("company_pass")
