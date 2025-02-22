@@ -3,7 +3,7 @@ import sqlite3, uuid, math, os, json
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-
+CORS(app)
 #####################################
 # Base de données SQLite et initialisation
 #####################################
