@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import sqlite3, uuid, math, os, json
+from flask_cors import CORS
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
