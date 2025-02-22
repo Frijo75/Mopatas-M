@@ -355,7 +355,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
 # Endpoint de test (n'affiche pas les utilisateurs)
 @app.route('/test', methods=['GET'])
 def test_endpoint():
-    return jsonify({"message": "API is running"}), 200
+    return jsonify({"message": "Bienvenue sur Mopatas"}), 200
 
 # Endpoint balance classique (vérifie aussi le codeCompte)
 @app.route('/balance', methods=['POST'])
