@@ -419,7 +419,7 @@ def inscription_endpoint():
         delete_pending_registration(code_session)
         return jsonify({'message': 'Inscription confirmée', 'numero': pending["numero"], 'type_compte': pending["type_compte"], 'codeCompte': pending.get("codeCompte")}), 201
     #actualisation de compte dans un téléphone
-    else if data.get('allready_have'):
+    elif data.get('allready_have'):
             # L'agent fournit son codeCompte
             codeCompte_req = data.get('codeCompte')
             if not codeCompte_req:
