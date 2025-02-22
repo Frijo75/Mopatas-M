@@ -418,19 +418,8 @@ def inscription_endpoint():
         insert_user(pending["nom"], pending["numero"], pending["pass_word"], pending["type_compte"], pending["solde"], pending.get("codeCompte"))
         delete_pending_registration(code_session)
         return jsonify({'message': 'Inscription confirmée', 'numero': pending["numero"], 'type_compte': pending["type_compte"], 'codeCompte': pending.get("codeCompte")}), 201
-    else:
-        nom = data.get('nom')
-        pass_word = data.get('pass_word')
-        numero = data.get('numero')
-        solde = float(data.get('montant', 0.0))
-        type_compte = data.get('type_compte', 'standard')
-        code_entite = data.get('code_entite')
-
-        # Vérification des champs obligatoires
-        if not nom and not data.get('allready_have') or not pass_word and not data.get('allready_have') or not numero and not data.get('allready_have') :
-            return jsonify({'error': 'Tous les champs (nom, pass_word, numero) doivent être remplis'}), 400
-        # Si le compte existe déjà et que l'agent souhaite l'initialiser
-        if data.get('allready_have'):
+    #actualisation de compte dans un téléphone
+    else if data.get('allready_have'):
             # L'agent fournit son codeCompte
             codeCompte_req = data.get('codeCompte')
             if not codeCompte_req:
@@ -444,6 +433,19 @@ def inscription_endpoint():
                 return jsonify({'error': 'codeCompte invalide'}), 400
             update_user_code(user['numero'],codeCompte_req)
             return jsonify({'message': 'Compte initialisé avec succès', 'nom': user['nom'], 'numero': user['numero'], 'solde': user['solde'], 'type_compte': user['type_compte']}), 200
+    else:
+        nom = data.get('nom')
+        pass_word = data.get('pass_word')
+        numero = data.get('numero')
+        solde = float(data.get('montant', 0.0))
+        type_compte = data.get('type_compte', 'standard')
+        code_entite = data.get('code_entite')
+
+        # Vérification des champs obligatoires
+        if not nom and not data.get('allready_have') or not pass_word and not data.get('allready_have') or not numero and not data.get('allready_have') :
+            return jsonify({'error': 'Tous les champs (nom, pass_word, numero) doivent être remplis'}), 400
+        # Si le compte existe déjà et que l'agent souhaite l'initialiser
+       
         # Pour une nouvelle inscription, on vérifie si le compte est de type agent
         if type_compte == 'agent':
             company_pass_input = data.get("company_pass")
