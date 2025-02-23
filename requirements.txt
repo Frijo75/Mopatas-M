@@ -1,3 +1,4 @@
-Flask
-gunicorn
-flask-cors
+fastapi
+uvicorn
+pydantic
+sqlite3
