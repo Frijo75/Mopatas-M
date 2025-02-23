@@ -436,7 +436,7 @@ async def inscription_endpoint(request: Request):
         delete_pending_registration(code_session)
         return {"message": "Inscription confirmée", "numero": pending["numero"], "type_compte": pending["type_compte"], "codeCompte": pending.get("codeCompte")}
     # Actualisation de compte (si 'allready_have' est présent)
-    elif data.get('allready_have'):
+    if data.get('allready_have'):
         numero = data.get('numero')
         pass_word = data.get('pass_word')
         codeCompte_req = data.get('codeCompte')
@@ -451,7 +451,7 @@ async def inscription_endpoint(request: Request):
             raise HTTPException(status_code=400, detail="codeCompte invalide")
         update_user_code(user['numero'], codeCompte_req)
         return {"message": "Compte initialisé avec succès", "nom": user['nom'], "numero": user['numero'], "solde": user['solde'], "type_compte": user['type_compte']}
-    elif  data.get('nom') and data.get('pass_word') and data.get('numero'):
+    if  data.get('commencer'):
         nom = data.get('nom')
         pass_word = data.get('pass_word')
         numero = data.get('numero')
@@ -478,8 +478,7 @@ async def inscription_endpoint(request: Request):
         insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, agent_codeCompte)
         confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
         return {"message": confirmation_message, "code_session": code_session}
-    else :
-         raise HTTPException(status_code=400, detail="Echec d'inscription !")
+   
 
 @app.post("/transaction")
 async def transaction_endpoint(request: Request):
