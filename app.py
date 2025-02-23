@@ -479,6 +479,39 @@ async def inscription_endpoint(request: Request):
         confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
         return {"message": confirmation_message, "code_session": code_session}
    
+#commencer 
+
+
+@app.post("/signup")
+async def signup_endpoint(request: Request):
+        data = await request.json()
+    
+        nom = data.get('nom')
+        pass_word = data.get('pass_word')
+        numero = data.get('numero')
+        solde = float(data.get('montant', 0.0))
+        type_compte = data.get('type_compte', 'standard')
+        code_entite = data.get('code_entite')
+        # Vérification des champs obligatoires
+        if not nom or not pass_word or not numero:
+            raise HTTPException(status_code=400, detail="Tous les champs (nom, pass_word, numero) doivent être remplis")
+        # Si inscription d'agent, vérification du mot de passe du compte company
+        if type_compte == 'agent':
+            company_pass_input = data.get("company_pass")
+            if not company_pass_input:
+                raise HTTPException(status_code=400, detail="Le mot de passe du compte company est requis pour inscrire un agent")
+            company = get_company_account()
+            if company is None or company_pass_input != company["pass_word"]:
+                raise HTTPException(status_code=400, detail="Mot de passe company incorrect")
+            agent_codeCompte = None  # Vous pouvez définir ici une logique spécifique
+        else:
+            agent_codeCompte = None
+        if get_user_by_number(numero):
+            raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
+        code_session = generate_session_code()
+        insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, agent_codeCompte)
+        confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
+        return {"message": confirmation_message, "code_session": code_session}
 
 @app.post("/transaction")
 async def transaction_endpoint(request: Request):
