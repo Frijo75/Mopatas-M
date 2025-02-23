@@ -1,10 +1,23 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 import sqlite3, uuid, math, os, json
-from flask_cors import CORS
 from datetime import datetime, timedelta
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
+import json
 
-app = Flask(__name__)
-CORS(app)
+
+app = FastAPI()
+
+# Ajouter le middleware CORS pour accepter toutes les sources
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Accepte toutes les origines
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],  # Accepte toutes les méthodes HTTP (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # Accepte tous les en-têtes
+)
 #####################################
 # Base de données SQLite et initialisation
 #####################################
@@ -349,185 +362,180 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
     else:
         return {'error': 'Type de transaction inconnu'}, 400
 
-#####################################
-# Endpoints
-#####################################
+class TransactionData(BaseModel):
+    numero_destinataire: str
+    numero_envoyeur: str
+    montant: float
+    pass_word: str
+    transaction_type: str
+    code_paie: Optional[str] = None
+    id_paie: Optional[str] = None
+    codeCompte: Optional[str] = None
 
-# Endpoint de test (n'affiche pas les utilisateurs)
-@app.route('/test', methods=['GET'])
+class InscriptionData(BaseModel):
+    confirmation: Optional[str] = None
+    code_session: Optional[str] = None
+    codeCompte: Optional[str] = None
+    pass_word: Optional[str] = None
+    nom: Optional[str] = None
+    numero: Optional[str] = None
+    montant: Optional[float] = 0.0
+    type_compte: Optional[str] = 'standard'
+    code_entite: Optional[str] = None
+    allready_have: Optional[bool] = False
+    company_pass: Optional[str] = None
+
+class BalanceData(BaseModel):
+    numero: str
+    codeCompte: Optional[str] = None
+    pass_word: str
+
+
+@app.get('/')
 def test_endpoint():
-    return jsonify({"message": "Bienvenue sur Mopatas"}), 200
+    return {"message": "Bienvenue sur Mopatas"}
 
-# Endpoint balance classique (vérifie aussi le codeCompte)
-@app.route('/balance', methods=['POST'])
-def balance_endpoint():
-    data = request.get_json()
-    numero = data.get('numero')
-    codeCompte_req = data.get('codeCompte')
+
+@app.post('/balance')
+def balance_endpoint(data: BalanceData):
+    numero = data.numero
+    codeCompte_req = data.codeCompte
     user = get_user_by_number(numero)
-    if user and data.get('pass_word') == user['pass_word']:
+    if user and data.pass_word == user['pass_word']:
         if user.get('codeCompte') is not None and codeCompte_req != user.get('codeCompte'):
-            return jsonify({'error': 'codeCompte invalide'}), 400
-        return jsonify([{
+            raise HTTPException(status_code=400, detail="codeCompte invalide")
+        return {
             "solde": user['solde'],
             "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!"
-        }]), 200
+        }
     else:
-        return jsonify({'error': 'Echec de vérification de solde ou mot de passe incorrect'}), 400
+        raise HTTPException(status_code=400, detail="Echec de vérification de solde ou mot de passe incorrect")
 
-# Endpoint balance_pro pour les comptes premium (vérifie également le codeCompte)
-@app.route('/balance_pro', methods=['POST'])
-def balance_pro_endpoint():
-    data = request.get_json()
-    numero = data.get('numero')
-    codeCompte_req = data.get('codeCompte')
+
+@app.post('/balance_pro')
+def balance_pro_endpoint(data: BalanceData):
+    numero = data.numero
+    codeCompte_req = data.codeCompte
     user = get_user_by_number(numero)
-    if not user or data.get('pass_word') != user['pass_word']:
-        return jsonify({'error': 'Utilisateur non trouvé ou mot de passe incorrect'}), 400
+    if not user or data.pass_word != user['pass_word']:
+        raise HTTPException(status_code=400, detail="Utilisateur non trouvé ou mot de passe incorrect")
     if user.get('codeCompte') is not None and codeCompte_req != user.get('codeCompte'):
-        return jsonify({'error': 'codeCompte invalide'}), 400
+        raise HTTPException(status_code=400, detail="codeCompte invalide")
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id_paiement, id_payeur, transaction_hash FROM premium_services WHERE id_payeur = ?", (user['numero'],))
     premium_services = cursor.fetchall()
     conn.close()
-    premium_list = [{"id_paiement": row["id_paiement"], "id_payeur": row["id_payeur"], "transaction_hash": row["transaction_hash"]} for row in premium_services]
-    return jsonify({
-         "solde": user["solde"],
-         "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!",
-         "premium_services": premium_list
-    }), 200
 
-# Inscription avec confirmation et initialisation pour agent
-@app.route('/inscription', methods=['POST'])
-def inscription_endpoint():
-    data = request.get_json()
-    confirmation = data.get('confirmation')
-    # Si c'est la confirmation d'inscription
+    premium_list = [{"id_paiement": row["id_paiement"], "id_payeur": row["id_payeur"], "transaction_hash": row["transaction_hash"]} for row in premium_services]
+    return {
+        "solde": user["solde"],
+        "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!",
+        "premium_services": premium_list
+    }
+
+
+@app.post('/inscription')
+def inscription_endpoint(data: InscriptionData):
+    confirmation = data.confirmation
     if confirmation == "yes":
-        code_session = data.get('code_session')
+        code_session = data.code_session
         if not code_session:
-            return jsonify({'error': 'code_session requis pour confirmation'}), 400
+            raise HTTPException(status_code=400, detail="code_session requis pour confirmation")
         pending = get_pending_registration(code_session)
         if not pending:
-            return jsonify({'error': 'Code de session invalide ou déjà confirmé'}), 400
+            raise HTTPException(status_code=400, detail="Code de session invalide ou déjà confirmé")
         if is_session_expired(pending["timestamp"]):
             delete_pending_registration(code_session)
-            return jsonify({'error': 'Code de session expiré'}), 400
-        # Lors de la confirmation, on récupère le codeCompte envoyé par l'utilisateur
+            raise HTTPException(status_code=400, detail="Code de session expiré")
         insert_user(pending["nom"], pending["numero"], pending["pass_word"], pending["type_compte"], pending["solde"], pending.get("codeCompte"))
         delete_pending_registration(code_session)
-        return jsonify({'message': 'Inscription confirmée', 'numero': pending["numero"], 'type_compte': pending["type_compte"], 'codeCompte': pending.get("codeCompte")}), 201
-    #actualisation de compte dans un téléphone
-    elif data.get('allready_have'):
-            # L'agent fournit son codeCompte
-            codeCompte_req = data.get('codeCompte')
-            if not codeCompte_req:
-                return jsonify({'error': 'codeCompte requis pour initialiser un compte déjà existant'}), 400
-            user = get_user_by_number(numero)
-            if not user:
-                return jsonify({'error': 'Aucun compte existant pour ce numéro'}), 400
-            if user['pass_word'] != pass_word:
-                return jsonify({'error': 'Mot de passe incorrect'}), 400
-            if user.get("codeCompte") != codeCompte_req:
-                return jsonify({'error': 'codeCompte invalide'}), 400
-            update_user_code(user['numero'],codeCompte_req)
-            return jsonify({'message': 'Compte initialisé avec succès', 'nom': user['nom'], 'numero': user['numero'], 'solde': user['solde'], 'type_compte': user['type_compte']}), 200
+        return {
+            'message': 'Inscription confirmée',
+            'numero': pending["numero"],
+            'type_compte': pending["type_compte"],
+            'codeCompte': pending.get("codeCompte")
+        }
+    elif data.allready_have:
+        codeCompte_req = data.codeCompte
+        if not codeCompte_req:
+            raise HTTPException(status_code=400, detail="codeCompte requis pour initialiser un compte déjà existant")
+        user = get_user_by_number(data.numero)
+        if not user:
+            raise HTTPException(status_code=400, detail="Aucun compte existant pour ce numéro")
+        if user['pass_word'] != data.pass_word:
+            raise HTTPException(status_code=400, detail="Mot de passe incorrect")
+        if user.get("codeCompte") != codeCompte_req:
+            raise HTTPException(status_code=400, detail="codeCompte invalide")
+        update_user_code(user['numero'], codeCompte_req)
+        return {
+            'message': 'Compte initialisé avec succès',
+            'nom': user['nom'],
+            'numero': user['numero'],
+            'solde': user['solde'],
+            'type_compte': user['type_compte']
+        }
     else:
-        nom = data.get('nom')
-        pass_word = data.get('pass_word')
-        numero = data.get('numero')
-        solde = float(data.get('montant', 0.0))
-        type_compte = data.get('type_compte', 'standard')
-        code_entite = data.get('code_entite')
+        # Handle new inscription
+        if not data.nom or not data.pass_word or not data.numero:
+            raise HTTPException(status_code=400, detail="Tous les champs (nom, pass_word, numero) doivent être remplis")
 
-        # Vérification des champs obligatoires
-        if not nom and not data.get('allready_have') or not pass_word and not data.get('allready_have') or not numero and not data.get('allready_have') :
-            return jsonify({'error': 'Tous les champs (nom, pass_word, numero) doivent être remplis'}), 400
-        # Si le compte existe déjà et que l'agent souhaite l'initialiser
-       
-        # Pour une nouvelle inscription, on vérifie si le compte est de type agent
-        if type_compte == 'agent':
-            company_pass_input = data.get("company_pass")
-            if not company_pass_input:
-                return jsonify({'error': 'Le mot de passe du compte company est requis pour inscrire un agent'}), 400
-            company = get_company_account()
-            if company is None or company_pass_input != company["pass_word"]:
-                return jsonify({'error': 'Mot de passe company incorrect'}), 400
-           
-            
-        else:
-            agent_codeCompte = None
-        if get_user_by_number(numero):
-            return jsonify({'error': 'Numéro déjà inscrit'}), 400
+        if get_user_by_number(data.numero):
+            raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
+
         code_session = generate_session_code()
-        insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, agent_codeCompte)
-        confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
-        return jsonify({'message': confirmation_message, 'code_session': code_session}), 200
+        insert_pending_registration(code_session, data.nom, data.numero, data.pass_word, data.type_compte, data.montant, data.code_entite, data.company_pass)
+        confirmation_message = f"Inscription demandée pour {data.nom}. Veuillez confirmer avec code_session: {code_session}"
+        return {
+            'message': confirmation_message,
+            'code_session': code_session
+        }
 
-# Demande de transaction : génère un code de session et enregistre la transaction en attente
-@app.route('/transaction', methods=['POST'])
-def transaction_endpoint():
-    data = request.get_json()
-    numero_destinataire = data.get('numero_destinataire')
-    numero_envoyeur = data.get('numero_envoyeur')
-    montant = data.get('montant')
-    pass_word = data.get('pass_word')
-    transaction_type = data.get('transaction_type')
-    code_paie = data.get('code_paie')  # Pour liquider/payer
-    id_paie = data.get('id_paie')      # Pour liquider/payer
-    codeCompte_req = data.get('codeCompte')
 
-    if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
-        return jsonify({'error': 'Tous les champs doivent être remplis'}), 400
+@app.post('/transaction')
+def transaction_endpoint(data: TransactionData):
+    if not data.numero_destinataire or not data.numero_envoyeur or not data.montant or not data.transaction_type:
+        raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis")
 
-    sender = get_user_by_number(numero_envoyeur)
-    if not sender or sender['pass_word'] != pass_word:
-        return jsonify({'error': 'Mot de passe incorrect ou utilisateur non trouvé'}), 400
-    if sender.get("codeCompte") is not None and codeCompte_req != sender.get("codeCompte"):
-        return jsonify({'error': 'codeCompte invalide'}), 400
+    sender = get_user_by_number(data.numero_envoyeur)
+    if not sender or sender['pass_word'] != data.pass_word:
+        raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur non trouvé")
+    if sender.get("codeCompte") is not None and data.codeCompte != sender.get("codeCompte"):
+        raise HTTPException(status_code=400, detail="codeCompte invalide")
 
     code_session = generate_session_code()
-    insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
+    insert_transaction(data.numero_envoyeur, data.numero_destinataire, data.montant, data.transaction_type, code_session)
 
     recipient_name = "Inconnu"
-    if transaction_type in ['retrait', 'envoi', 'depot', 'depot_pro']:
-        recipient = get_user_by_number(numero_destinataire)
-        if recipient:
-            recipient_name = recipient['nom']
-    elif transaction_type in ['liquider', 'paie']:
-        parts = numero_destinataire.split(';')
-        if len(parts) >= 1:
-            destinataire_phone = parts[0].strip()
-            recipient = get_user_by_number(destinataire_phone)
-            if recipient:
-                recipient_name = recipient['nom']
+    recipient = get_user_by_number(data.numero_destinataire)
+    if recipient:
+        recipient_name = recipient['nom']
+    return {
+        'message': f"Vous demandez une transaction de {data.montant} FC à {recipient_name}. Confirmez-vous ?",
+        'code_session': code_session
+    }
 
-    confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ?"
-    return jsonify({'message': confirmation_message, 'code_session': code_session}), 200
 
-# Confirmation de transaction
-@app.route('/confirm_transaction', methods=['POST'])
-def confirm_transaction_endpoint():
-    data = request.get_json()
+@app.post('/confirm_transaction')
+def confirm_transaction_endpoint(data: dict = Body(...)):
     code_session = data.get('code_session')
     if not code_session:
-        return jsonify({'error': 'Le code de session est requis'}), 400
-    code_paie = data.get('code_paie')
-    id_paie = data.get('id_paie')
+        raise HTTPException(status_code=400, detail="Le code de session est requis")
 
     transaction_data = validate_transaction(code_session)
     if transaction_data is None:
-        return jsonify({'error': 'Code de session invalide, expiré ou transaction déjà confirmée'}), 400
+        raise HTTPException(status_code=400, detail="Code de session invalide, expiré ou transaction déjà confirmée")
 
     numero_envoyeur = transaction_data['numero_envoyeur']
     numero_destinataire = transaction_data['numero_destinataire']
     montant = transaction_data['montant']
     transaction_type = transaction_data['type']
 
-    result, status = process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, code_paie, id_paie)
-    return jsonify(result), status
+    result, status = process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
+    return result, status
+
 
 if __name__ == '__main__':
     init_db()  # Initialise la base de données et crée les tables si nécessaire
-    app.run(debug=True)
+   
