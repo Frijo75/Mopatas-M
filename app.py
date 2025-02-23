@@ -28,6 +28,25 @@ def generate_token():
     return str(uuid.uuid4())
 
 #####################################
+# Fonctions de validation
+#####################################
+def validate_password(pass_word: str):
+    # Minimum 6 caractères
+    if len(pass_word) < 6:
+        raise HTTPException(status_code=400, detail="Le mot de passe doit contenir au moins 6 caractères")
+    # Refuser les suites ou répétitions triviales (ex: 123456, 000000, 111111)
+    if pass_word in ["123456", "000000", "111111"]:
+        raise HTTPException(status_code=400, detail="Mot de passe trop simple")
+    # Vous pouvez ajouter d'autres vérifications (par exemple, caractères majuscules, chiffres, symboles)
+    return True
+
+def validate_phone(numero: str):
+    # Exemple de format : exactement 10 chiffres
+    if not re.fullmatch(r"\d{10}", numero):
+        raise HTTPException(status_code=400, detail="Le numéro doit comporter exactement 10 chiffres")
+    return True
+
+#####################################
 # Base de données SQLite et initialisation
 #####################################
 def get_db_connection():
@@ -363,6 +382,103 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
 @app.get("/test")
 def test_endpoint():
     return {"message": "Bienvenue sur Mopatas"}
+
+#####################################
+# Endpoints
+#####################################
+
+# 1. Inscription : Enregistrement dans pending_registrations
+@app.post("/inscription")
+async def inscription_endpoint(request: Request):
+    data = await request.json()
+    logger.info(f"Requête inscription reçue: {data}")
+    
+    # Vérifier les champs obligatoires
+    nom = data.get('nom')
+    pass_word = data.get('pass_word')
+    numero = data.get('numero')
+    type_compte = data.get('type_compte', 'standard')
+    codeCompte = data.get('codeCompte')  # Obligatoire pour non-agent
+    code_entite = data.get('code_entite') if type_compte == 'premium' else None
+
+    if not nom or not pass_word or not numero:
+        raise HTTPException(status_code=400, detail="Les champs nom, pass_word et numero sont obligatoires")
+    
+    # Validation du mot de passe
+    validate_password(pass_word)
+    # Validation du numéro
+    validate_phone(numero)
+    
+    # Vérifier si le numéro existe déjà dans pending_registrations ou dans users
+    if get_user_by_number(numero):
+        raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
+    
+    # Déterminer le montant :
+    # Si le compte est agent, on prend le montant envoyé, sinon, montant = 0.0
+    if type_compte == 'agent':
+        try:
+            montant = float(data.get("montant", 0.0))
+        except:
+            raise HTTPException(status_code=400, detail="Montant invalide")
+    else:
+        montant = 0.0
+    
+    # Pour les comptes non-agent, codeCompte est obligatoire
+    if type_compte != 'agent' and not codeCompte:
+        raise HTTPException(status_code=400, detail="codeCompte requis pour ce type de compte")
+    
+    code_session = generate_session_code()
+    insert_pending_registration(code_session, nom, numero, pass_word, type_compte, montant, code_entite, codeCompte)
+    confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
+    return {"message": confirmation_message, "code_session": code_session}
+
+# 2. Confirm_inscription : Confirmation et insertion dans la table users
+@app.post("/confirm_inscription")
+async def confirm_inscription_endpoint(request: Request):
+    data = await request.json()
+    code_session = data.get('code_session')
+    confirmation = data.get('confirmation')
+    if confirmation != True:
+        raise HTTPException(status_code=400, detail="La confirmation doit être vraie")
+    if not code_session:
+        raise HTTPException(status_code=400, detail="code_session requis pour confirmation")
+    pending = get_pending_registration(code_session)
+    if not pending:
+        raise HTTPException(status_code=400, detail="Code de session invalide ou déjà confirmé")
+    if is_session_expired(pending["timestamp"]):
+        delete_pending_registration(code_session)
+        raise HTTPException(status_code=400, detail="Code de session expiré")
+    # Insertion dans la table users (le mot de passe est déjà stocké crypté dans pending_registrations)
+    insert_user(pending["nom"], pending["numero"], pending["pass_word"], pending["type_compte"], pending["solde"], pending.get("codeCompte"))
+    delete_pending_registration(code_session)
+    return {
+        "message": "Inscription confirmée",
+        "numero": pending["numero"],
+        "type_compte": pending["type_compte"],
+        "codeCompte": pending.get("codeCompte")
+    }
+
+# 3. Recup_inscription : Récupérer un utilisateur et mettre à jour son codeCompte
+@app.post("/recup_inscription")
+async def recup_inscription_endpoint(request: Request):
+    data = await request.json()
+    numero = data.get('numero')
+    pass_word = data.get('pass_word')
+    codeCompte = data.get('codeCompte')
+    if not numero or not pass_word or not codeCompte:
+        raise HTTPException(status_code=400, detail="numero, pass_word et codeCompte sont requis")
+    user = get_user_by_number(numero)
+    if not user:
+        raise HTTPException(status_code=400, detail="Utilisateur non trouvé")
+    if user['pass_word'] != pass_word:
+        raise HTTPException(status_code=400, detail="Mot de passe incorrect")
+    # Mettre à jour le codeCompte de l'utilisateur
+    update_user_code(numero, codeCompte)
+    return {
+        "message": "Compte mis à jour avec succès",
+        "numero": numero,
+        "codeCompte": codeCompte
+    }
 
 @app.post("/balance")
 async def balance_endpoint(request: Request):
