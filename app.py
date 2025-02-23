@@ -3,6 +3,9 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+logging.basicConfig(level=logging.INFO)
+
 
 # Création de l'application FastAPI
 app = FastAPI()
@@ -419,8 +422,10 @@ async def balance_pro_endpoint(request: Request):
 @app.post("/inscription")
 async def inscription_endpoint(request: Request):
     data = await request.json()
+    logging.info(f"Requête reçue: {data}")
+
     confirmation = data.get('confirmation')
-    # Si c'est la confirmation d'inscription
+
     if confirmation == "yes":
         code_session = data.get('code_session')
         if not code_session:
@@ -431,11 +436,10 @@ async def inscription_endpoint(request: Request):
         if is_session_expired(pending["timestamp"]):
             delete_pending_registration(code_session)
             raise HTTPException(status_code=400, detail="Code de session expiré")
-        # Confirmation : on ajoute l'utilisateur puis on supprime l'inscription en attente
         insert_user(pending["nom"], pending["numero"], pending["pass_word"], pending["type_compte"], pending["solde"], pending.get("codeCompte"))
         delete_pending_registration(code_session)
         return {"message": "Inscription confirmée", "numero": pending["numero"], "type_compte": pending["type_compte"], "codeCompte": pending.get("codeCompte")}
-    # Actualisation de compte (si 'allready_have' est présent)
+
     if data.get('allready_have'):
         numero = data.get('numero')
         pass_word = data.get('pass_word')
@@ -451,17 +455,19 @@ async def inscription_endpoint(request: Request):
             raise HTTPException(status_code=400, detail="codeCompte invalide")
         update_user_code(user['numero'], codeCompte_req)
         return {"message": "Compte initialisé avec succès", "nom": user['nom'], "numero": user['numero'], "solde": user['solde'], "type_compte": user['type_compte']}
-    if  data.get('commencer'):
+
+    if data.get('commencer'):
+        logging.info("Début du processus d'inscription")
         nom = data.get('nom')
         pass_word = data.get('pass_word')
         numero = data.get('numero')
         solde = float(data.get('montant', 0.0))
         type_compte = data.get('type_compte', 'standard')
         code_entite = data.get('code_entite')
-        # Vérification des champs obligatoires
+
         if not nom or not pass_word or not numero:
             raise HTTPException(status_code=400, detail="Tous les champs (nom, pass_word, numero) doivent être remplis")
-        # Si inscription d'agent, vérification du mot de passe du compte company
+
         if type_compte == 'agent':
             company_pass_input = data.get("company_pass")
             if not company_pass_input:
@@ -469,17 +475,24 @@ async def inscription_endpoint(request: Request):
             company = get_company_account()
             if company is None or company_pass_input != company["pass_word"]:
                 raise HTTPException(status_code=400, detail="Mot de passe company incorrect")
-            agent_codeCompte = None  # Vous pouvez définir ici une logique spécifique
+            agent_codeCompte = None
         else:
             agent_codeCompte = None
+
         if get_user_by_number(numero):
             raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
+
+        logging.info("Génération du code de session")
         code_session = generate_session_code()
+        logging.info(f"Code session généré: {code_session}")
+
         insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, agent_codeCompte)
+        logging.info("Inscription enregistrée en attente de confirmation")
+
         confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
         return {"message": confirmation_message, "code_session": code_session}
-   
-#commencer 
+
+    return {"message": "Aucune action définie"}
 
 
 @app.post("/signup")
