@@ -451,7 +451,7 @@ async def inscription_endpoint(request: Request):
             raise HTTPException(status_code=400, detail="codeCompte invalide")
         update_user_code(user['numero'], codeCompte_req)
         return {"message": "Compte initialisé avec succès", "nom": user['nom'], "numero": user['numero'], "solde": user['solde'], "type_compte": user['type_compte']}
-    else:
+    elif  data.get('nom') and data.get('pass_word') and data.get('numero'):
         nom = data.get('nom')
         pass_word = data.get('pass_word')
         numero = data.get('numero')
@@ -478,6 +478,8 @@ async def inscription_endpoint(request: Request):
         insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, agent_codeCompte)
         confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
         return {"message": confirmation_message, "code_session": code_session}
+    else :
+         raise HTTPException(status_code=400, detail="Echec d'inscription !")
 
 @app.post("/transaction")
 async def transaction_endpoint(request: Request):
