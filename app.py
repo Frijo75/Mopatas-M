@@ -402,8 +402,8 @@ async def balance_pro_endpoint(request: Request):
          "premium_services": premium_list
     }
 
-@app.post("/inscription")
-async def inscription_endpoint(request: Request):
+@app.post("/signup")
+async def signup_endpoint(request: Request):
     data = await request.json()
     logger.info(f"Requête inscription reçue: {data}")
     
@@ -460,7 +460,7 @@ async def inscription_endpoint(request: Request):
         nom = data.get('nom')
         pass_word = data.get('pass_word')
         numero = data.get('numero')
-        solde = float(data.get('montant', 0.0))
+       
         type_compte = data.get('type_compte', 'standard')
         code_entite = data.get('code_entite')
         
@@ -475,9 +475,11 @@ async def inscription_endpoint(request: Request):
             company = get_company_account()
             if company is None or company_pass_input != company["pass_word"]:
                 raise HTTPException(status_code=400, detail="Mot de passe company incorrect")
-            agent_codeCompte = None  # Vous pouvez ajouter une logique spécifique ici
+            codeCompte = None  # Vous pouvez ajouter une logique spécifique ici
+            solde =  data.get("montant")
         else:
-            agent_codeCompte = None
+            codeCompte =  data.get("codeCompte")
+            solde =  0.0
         
         if get_user_by_number(numero):
             raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
@@ -486,7 +488,7 @@ async def inscription_endpoint(request: Request):
         code_session = generate_session_code()
         logger.info(f"Code session généré: {code_session}")
         
-        insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, agent_codeCompte)
+        insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte)
         logger.info("Inscription enregistrée en attente de confirmation")
         
         confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
