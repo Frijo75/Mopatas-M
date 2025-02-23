@@ -392,7 +392,7 @@ class BalanceData(BaseModel):
     pass_word: str
 
 
-@app.get('/')
+@app.get('/test')
 def test_endpoint():
     return {"message": "Bienvenue sur Mopatas"}
 
