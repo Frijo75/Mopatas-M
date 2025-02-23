@@ -495,7 +495,7 @@ async def signup_endpoint(request: Request):
         return {"message": confirmation_message, "code_session": code_session}
     
     else:
-        raise HTTPException(status_code=400, detail="Aucune action définie pour l'inscription")s
+        raise HTTPException(status_code=400, detail="Aucune action définie pour l'inscription")
 
 @app.post("/transaction")
 async def transaction_endpoint(request: Request):
