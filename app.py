@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Autorise toutes les origines (à restreindre en prod)
+# Configuration CORS : autorise toutes les origines (à restreindre en production)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -402,6 +402,124 @@ async def balance_pro_endpoint(request: Request):
          "premium_services": premium_list
     }
 
+@app.post("/inscription")
+async def inscription_endpoint(request: Request):
+    data = await request.json()
+    logger.info(f"Requête inscription reçue: {data}")
+
+    confirmation = data.get('confirmation')
+    # Cas confirmation d'une inscription en attente
+    if confirmation == "yes":
+        code_session = data.get('code_session')
+        if not code_session:
+            raise HTTPException(status_code=400, detail="code_session requis pour confirmation")
+        pending = get_pending_registration(code_session)
+        if not pending:
+            raise HTTPException(status_code=400, detail="Code de session invalide ou déjà confirmé")
+        if is_session_expired(pending["timestamp"]):
+            delete_pending_registration(code_session)
+            raise HTTPException(status_code=400, detail="Code de session expiré")
+        insert_user(pending["nom"], pending["numero"], pending["pass_word"], pending["type_compte"], pending["solde"], pending.get("codeCompte"))
+        delete_pending_registration(code_session)
+        return {"message": "Inscription confirmée", "numero": pending["numero"], "type_compte": pending["type_compte"], "codeCompte": pending.get("codeCompte")}
+    
+    # Cas d'actualisation de compte existant (si "allready_have" est présent)
+    elif data.get('allready_have'):
+        numero = data.get('numero')
+        pass_word = data.get('pass_word')
+        codeCompte_req = data.get('codeCompte')
+        if not codeCompte_req:
+            raise HTTPException(status_code=400, detail="codeCompte requis pour initialiser un compte déjà existant")
+        user = get_user_by_number(numero)
+        if not user:
+            raise HTTPException(status_code=400, detail="Aucun compte existant pour ce numéro")
+        if user['pass_word'] != pass_word:
+            raise HTTPException(status_code=400, detail="Mot de passe incorrect")
+        if user.get("codeCompte") != codeCompte_req:
+            raise HTTPException(status_code=400, detail="codeCompte invalide")
+        update_user_code(user['numero'], codeCompte_req)
+        return {"message": "Compte initialisé avec succès", "nom": user['nom'], "numero": user['numero'], "solde": user['solde'], "type_compte": user['type_compte']}
+    
+    # Cas d'une nouvelle inscription (si "commencer" est présent)
+    elif data.get('commencer'):
+        logger.info("Début du processus d'inscription")
+        nom = data.get('nom')
+        pass_word = data.get('pass_word')
+        numero = data.get('numero')
+        solde = float(data.get('montant', 0.0))
+        type_compte = data.get('type_compte', 'standard')
+        code_entite = data.get('code_entite')
+
+        if not nom or not pass_word or not numero:
+            raise HTTPException(status_code=400, detail="Tous les champs (nom, pass_word, numero) doivent être remplis")
+
+        if type_compte == 'agent':
+            company_pass_input = data.get("company_pass")
+            if not company_pass_input:
+                raise HTTPException(status_code=400, detail="Le mot de passe du compte company est requis pour inscrire un agent")
+            company = get_company_account()
+            if company is None or company_pass_input != company["pass_word"]:
+                raise HTTPException(status_code=400, detail="Mot de passe company incorrect")
+            agent_codeCompte = None
+        else:
+            agent_codeCompte = None
+
+        if get_user_by_number(numero):
+            raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
+
+        logger.info("Génération du code de session")
+        code_session = generate_session_code()
+        logger.info(f"Code session généré: {code_session}")
+
+        insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, agent_codeCompte)
+        logger.info("Inscription enregistrée en attente de confirmation")
+
+        confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
+        return {"message": confirmation_message, "code_session": code_session}
+
+    else:
+        raise HTTPException(status_code=400, detail="Aucune action définie pour l'inscription")
+
+@app.post("/transaction")
+async def transaction_endpoint(request: Request):
+    data = await request.json()
+    numero_destinataire = data.get('numero_destinataire')
+    numero_envoyeur = data.get('numero_envoyeur')
+    montant = data.get('montant')
+    pass_word = data.get('pass_word')
+    transaction_type = data.get('transaction_type')
+    code_paie = data.get('code_paie')
+    id_paie = data.get('id_paie')
+    codeCompte_req = data.get('codeCompte')
+
+    if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
+        raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis")
+
+    sender = get_user_by_number(numero_envoyeur)
+    if not sender or sender['pass_word'] != pass_word:
+        raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur non trouvé")
+    if sender.get("codeCompte") is not None and codeCompte_req != sender.get("codeCompte"):
+        raise HTTPException(status_code=400, detail="codeCompte invalide")
+
+    code_session = generate_session_code()
+    insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
+
+    recipient_name = "Inconnu"
+    if transaction_type in ['retrait', 'envoi', 'depot', 'depot_pro']:
+        recipient = get_user_by_number(numero_destinataire)
+        if recipient:
+            recipient_name = recipient['nom']
+    elif transaction_type in ['liquider', 'paie']:
+        parts = numero_destinataire.split(';')
+        if len(parts) >= 1:
+            destinataire_phone = parts[0].strip()
+            recipient = get_user_by_number(destinataire_phone)
+            if recipient:
+                recipient_name = recipient['nom']
+
+    confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ?"
+    return {"message": confirmation_message, "code_session": code_session}
+
 @app.post("/confirm_transaction")
 async def confirm_transaction_endpoint(request: Request):
     data = await request.json()
@@ -426,6 +544,6 @@ async def confirm_transaction_endpoint(request: Request):
     return result
 
 if __name__ == "__main__":
-    init_db()  # Initialise la base de données et crée les tables si nécessaire
+    init_db()  # Initialise la base de données
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
