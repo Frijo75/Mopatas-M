@@ -50,7 +50,7 @@ def validate_phone(numero: str):
 # Base de données SQLite et initialisation
 #####################################
 def get_db_connection():
-    DATABASE = os.path.join(os.getcwd(), "mopatas.db")
+    DATABASE = os.path.join(os.getcwd(), "mopatas.sqlite3")
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
