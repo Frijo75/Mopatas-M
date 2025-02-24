@@ -3,7 +3,9 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-
+from pydantic import BaseModel, validator
+from typing import Union
+import re
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -50,10 +52,14 @@ def validate_phone(numero: str):
 # Base de données SQLite et initialisation
 #####################################
 def get_db_connection():
-    DATABASE = os.path.join(os.getcwd(), "mopatas.sqlite3")
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        DATABASE = os.path.join(os.getcwd(), "mopatas.db")
+        print(f"{DATABASE}")
+        conn = sqlite3.connect(DATABASE)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error as e:
+        return None
 
 def get_company_account():
     conn = get_db_connection()
@@ -78,6 +84,7 @@ def init_db():
         codeCompte TEXT
       )
     ''')
+    conn.commit()
     # Table des transactions
     cursor.execute('''
       CREATE TABLE IF NOT EXISTS transactions (
@@ -92,6 +99,7 @@ def init_db():
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     ''')
+    conn.commit()
     # Table des inscriptions en attente
     cursor.execute('''
       CREATE TABLE IF NOT EXISTS pending_registrations (
@@ -107,6 +115,7 @@ def init_db():
          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     ''')
+    conn.commit()
     # Table du compte d'entreprise
     cursor.execute('''
       CREATE TABLE IF NOT EXISTS company_account (
@@ -115,6 +124,7 @@ def init_db():
         pass_word TEXT NOT NULL
       )
     ''')
+    conn.commit()
     cursor.execute("SELECT COUNT(*) as count FROM company_account")
     row = cursor.fetchone()
     if row["count"] == 0:
@@ -148,11 +158,28 @@ def init_db():
 #####################################
 def insert_user(nom, numero, pass_word, type_compte="standard", solde=0.0, codeCompte=None):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO users (nom, numero, pass_word, solde, type_compte, codeCompte) VALUES (?, ?, ?, ?, ?, ?)",
-                   (nom, numero, pass_word, solde, type_compte, codeCompte))
-    conn.commit()
-    conn.close()
+    if conn is None:
+        return False  # Échec de la connexion
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO users (nom, numero, pass_word, solde, type_compte, codeCompte)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (nom, numero, pass_word, solde, type_compte, codeCompte))
+
+        conn.commit()
+        print("Utilisateur enregistré avec succès !")
+        return True
+
+    except sqlite3.IntegrityError:
+        print("Erreur : Le numéro est déjà utilisé.")
+        return False
+    except sqlite3.Error as e:
+        print(f"Erreur SQLite : {e}")
+        return False
+    finally:
+        conn.close()
 
 def get_user_by_number(numero):
     conn = get_db_connection()
@@ -235,9 +262,16 @@ def delete_pending_registration(code_session):
     conn.close()
 
 def is_session_expired(timestamp_str):
-    session_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-    return datetime.now() > session_time + timedelta(minutes=10)
-
+    try:
+        session_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        print(f"Erreur de conversion du timestamp '{timestamp_str}': {e}")
+        raise
+    now = datetime.utcnow()  # ou datetime.now() si vous travaillez en local
+    expiration_time = session_time + timedelta(minutes=10)
+    print(f"Session time: {session_time}, Expiration time: {expiration_time}, Now: {now}")
+    return now > expiration_time
+    
 def calculate_fees(montant, transaction_type):
     if transaction_type in ['envoi', 'depot']:
         return 0
@@ -387,76 +421,111 @@ def test_endpoint():
 # Endpoints
 #####################################
 
-# 1. Inscription : Enregistrement dans pending_registrations
 @app.post("/inscription")
-async def inscription_endpoint(request: Request):
-    data = await request.json()
-    logger.info(f"Requête inscription reçue: {data}")
-    
-    # Vérifier les champs obligatoires
-    nom = data.get('nom')
-    pass_word = data.get('pass_word')
-    numero = data.get('numero')
-    type_compte = data.get('type_compte', 'standard')
-    codeCompte = data.get('codeCompte')  # Obligatoire pour non-agent
-    code_entite = data.get('code_entite') if type_compte == 'premium' else None
+async def inscription_endpoint(data: dict):
+    try:
+        
+        logger.info(f"Requête inscription reçue: {data}")
+        
+        # Vérifier les champs obligatoires
+        nom = data.get('nom')
+        pass_word = data.get('pass_word')
+        numero = data.get('numero')
+        type_compte = data.get('type_compte', 'standard')
+        codeCompte = data.get('codeCompte')  # Obligatoire pour non-agent
+        code_entite = data.get('code_entite') if type_compte == 'premium' else None
 
-    if not nom or not pass_word or not numero:
-        raise HTTPException(status_code=400, detail="Les champs nom, pass_word et numero sont obligatoires")
-    
-    # Validation du mot de passe
-    validate_password(pass_word)
-    # Validation du numéro
-    validate_phone(numero)
-    
-    # Vérifier si le numéro existe déjà dans pending_registrations ou dans users
-    if get_user_by_number(numero):
-        raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
-    
-    # Déterminer le montant :
-    # Si le compte est agent, on prend le montant envoyé, sinon, montant = 0.0
-    if type_compte == 'agent':
-        try:
-            montant = float(data.get("montant", 0.0))
-        except:
-            raise HTTPException(status_code=400, detail="Montant invalide")
-    else:
-        montant = 0.0
-    
-    # Pour les comptes non-agent, codeCompte est obligatoire
-    if type_compte != 'agent' and not codeCompte:
-        raise HTTPException(status_code=400, detail="codeCompte requis pour ce type de compte")
-    
-    code_session = generate_session_code()
-    insert_pending_registration(code_session, nom, numero, pass_word, type_compte, montant, code_entite, codeCompte)
-    confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
-    return {"message": confirmation_message, "code_session": code_session}
-
+        if not nom or not pass_word or not numero:
+            raise HTTPException(status_code=400, detail="Les champs nom, pass_word et numero sont obligatoires")
+        
+        # Validation du mot de passe
+        validate_password(pass_word)
+        # Validation du numéro
+        validate_phone(numero)
+        
+        # Vérifier si le numéro existe déjà dans pending_registrations ou dans users
+        if get_user_by_number(numero):
+            raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
+        
+        # Déterminer le montant :
+        # Si le compte est agent, on prend le montant envoyé, sinon, montant = 0.0
+        if type_compte == 'agent':
+            try:
+                montant = float(data.get("montant", 0.0))
+            except:
+                raise HTTPException(status_code=400, detail="Montant invalide")
+        else:
+            montant = 0.0
+        
+        # Pour les comptes non-agent, codeCompte est obligatoire
+        if type_compte != 'agent' and not codeCompte:
+            raise HTTPException(status_code=400, detail="codeCompte requis pour ce type de compte")
+        
+        code_session = generate_session_code()
+        insert_pending_registration(code_session, nom, numero, pass_word, type_compte, montant, code_entite, codeCompte)
+        confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
+        return {"message": confirmation_message, "code_session": code_session}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 # 2. Confirm_inscription : Confirmation et insertion dans la table users
+
+class ConfirmRequest(BaseModel):
+    code_session: str
+    confirmation: Union[bool, str]
+
+    @validator("confirmation", pre=True)
+    def parse_confirmation(cls, v):
+        if isinstance(v, str):
+            return v.lower() == "yes"
+        return v
+
 @app.post("/confirm_inscription")
-async def confirm_inscription_endpoint(request: Request):
-    data = await request.json()
-    code_session = data.get('code_session')
-    confirmation = data.get('confirmation')
-    if confirmation != True:
-        raise HTTPException(status_code=400, detail="La confirmation doit être vraie")
-    if not code_session:
-        raise HTTPException(status_code=400, detail="code_session requis pour confirmation")
-    pending = get_pending_registration(code_session)
-    if not pending:
-        raise HTTPException(status_code=400, detail="Code de session invalide ou déjà confirmé")
-    if is_session_expired(pending["timestamp"]):
+async def confirm_inscription_endpoint(data: ConfirmRequest):
+    try:
+        logger.info(f"Requête inscription reçue: {data.dict()}")
+        code_session = data.code_session
+        confirmation = data.confirmation
+
+        if not confirmation:
+            raise HTTPException(status_code=400, detail="La confirmation doit être vraie")
+        if not code_session:
+            raise HTTPException(status_code=400, detail="code_session requis pour confirmation")
+        
+        pending = get_pending_registration(code_session)
+        if not pending:
+            raise HTTPException(status_code=400, detail="Code de session invalide ou déjà confirmé")
+        if is_session_expired(pending["timestamp"]):
+            delete_pending_registration(code_session)
+            raise HTTPException(status_code=400, detail="Code de session expiré")
+        
+        # Pour un agent, codeCompte doit être None, sinon on le récupère depuis pending.
+        codeCompte = None if pending["type_compte"] == "agent" else pending.get("codeCompte")
+        
+        # Insertion dans la table users (on suppose que insert_user gère aussi les erreurs)
+        insert_user(
+            pending["nom"],
+            pending["numero"],
+            pending["pass_word"],
+            pending["type_compte"],
+            pending["solde"],
+            codeCompte
+        )
         delete_pending_registration(code_session)
-        raise HTTPException(status_code=400, detail="Code de session expiré")
-    # Insertion dans la table users (le mot de passe est déjà stocké crypté dans pending_registrations)
-    insert_user(pending["nom"], pending["numero"], pending["pass_word"], pending["type_compte"], pending["solde"], pending.get("codeCompte"))
-    delete_pending_registration(code_session)
-    return {
-        "message": "Inscription confirmée",
-        "numero": pending["numero"],
-        "type_compte": pending["type_compte"],
-        "codeCompte": pending.get("codeCompte")
-    }
+        
+        logger.info(f"Inscription confirmée pour {pending['numero']}")
+        return {
+            "message": "Inscription confirmée",
+            "numero": pending["numero"],
+            "type_compte": pending["type_compte"],
+            "codeCompte": codeCompte
+        }
+    except HTTPException as e:
+        logger.error(f"HTTPException: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.error(f"Erreur lors de la confirmation de l'inscription: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # 3. Recup_inscription : Récupérer un utilisateur et mettre à jour son codeCompte
 @app.post("/recup_inscription")
@@ -518,100 +587,6 @@ async def balance_pro_endpoint(request: Request):
          "premium_services": premium_list
     }
 
-@app.post("/signup")
-async def signup_endpoint(request: Request):
-    data = await request.json()
-    logger.info(f"Requête inscription reçue: {data}")
-    
-    confirmation = data.get('confirmation')
-    
-    # Si c'est la confirmation d'inscription
-    if confirmation == "yes":
-        code_session = data.get('code_session')
-        if not code_session:
-            raise HTTPException(status_code=400, detail="code_session requis pour confirmation")
-        pending = get_pending_registration(code_session)
-        if not pending:
-            raise HTTPException(status_code=400, detail="Code de session invalide ou déjà confirmé")
-        if is_session_expired(pending["timestamp"]):
-            delete_pending_registration(code_session)
-            raise HTTPException(status_code=400, detail="Code de session expiré")
-        # Inscription confirmée : ajout de l'utilisateur puis suppression de l'inscription en attente
-        insert_user(pending["nom"], pending["numero"], pending["pass_word"], 
-                    pending["type_compte"], pending["solde"], pending.get("codeCompte"))
-        delete_pending_registration(code_session)
-        return {
-            "message": "Inscription confirmée",
-            "numero": pending["numero"],
-            "type_compte": pending["type_compte"],
-            "codeCompte": pending.get("codeCompte")
-        }
-    
-    # Actualisation de compte existant (si "allready_have" est présent)
-    elif data.get('allready_have'):
-        numero = data.get('numero')
-        pass_word = data.get('pass_word')
-        codeCompte_req = data.get('codeCompte')
-        if not codeCompte_req:
-            raise HTTPException(status_code=400, detail="codeCompte requis pour initialiser un compte déjà existant")
-        user = get_user_by_number(numero)
-        if not user:
-            raise HTTPException(status_code=400, detail="Aucun compte existant pour ce numéro")
-        if user['pass_word'] != pass_word:
-            raise HTTPException(status_code=400, detail="Mot de passe incorrect")
-        if user.get("codeCompte") != codeCompte_req:
-            raise HTTPException(status_code=400, detail="codeCompte invalide")
-        update_user_code(user['numero'], codeCompte_req)
-        return {
-            "message": "Compte initialisé avec succès",
-            "nom": user['nom'],
-            "numero": user['numero'],
-            "solde": user['solde'],
-            "type_compte": user['type_compte']
-        }
-    
-    # Nouvelle inscription (si "commencer" est présent)
-    elif data.get('commencer'):
-        logger.info("Début du processus d'inscription")
-        nom = data.get('nom')
-        pass_word = data.get('pass_word')
-        numero = data.get('numero')
-       
-        type_compte = data.get('type_compte', 'standard')
-        code_entite = data.get('code_entite')
-        
-        if not nom or not pass_word or not numero:
-            raise HTTPException(status_code=400, detail="Tous les champs (nom, pass_word, numero) doivent être remplis")
-        
-        # Si inscription d'agent, vérification du mot de passe du compte company
-        if type_compte == 'agent':
-            company_pass_input = data.get("company_pass")
-            if not company_pass_input:
-                raise HTTPException(status_code=400, detail="Le mot de passe du compte company est requis pour inscrire un agent")
-            company = get_company_account()
-            if company is None or company_pass_input != company["pass_word"]:
-                raise HTTPException(status_code=400, detail="Mot de passe company incorrect")
-            codeCompte = None  # Vous pouvez ajouter une logique spécifique ici
-            solde =  data.get("montant")
-        else:
-            codeCompte =  data.get("codeCompte")
-            solde =  0.0
-        
-        if get_user_by_number(numero):
-            raise HTTPException(status_code=400, detail="Numéro déjà inscrit")
-        
-        logger.info("Génération du code de session")
-        code_session = generate_session_code()
-        logger.info(f"Code session généré: {code_session}")
-        
-        insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte)
-        logger.info("Inscription enregistrée en attente de confirmation")
-        
-        confirmation_message = f"Inscription demandée pour {nom}. Veuillez confirmer avec code_session: {code_session}"
-        return {"message": confirmation_message, "code_session": code_session}
-    
-    else:
-        raise HTTPException(status_code=400, detail="Aucune action définie pour l'inscription")
 
 @app.post("/transaction")
 async def transaction_endpoint(request: Request):
