@@ -499,7 +499,7 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
             raise HTTPException(status_code=400, detail="Code de session expiré")
         
         # Pour un agent, codeCompte doit être None, sinon on le récupère depuis pending.
-        codeCompte = None if pending["type_compte"] == "agent" else pending.get("codeCompte")
+        codeCompte = None if pending["type_compte"] == "agent" else pending["codeCompte"]
         
         # Insertion dans la table users (on suppose que insert_user gère aussi les erreurs)
         insert_user(
