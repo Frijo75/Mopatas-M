@@ -517,7 +517,7 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
         
         logger.info(f"Inscription confirmée pour {pending['numero']}")
         return {
-            "detail": "Inscription confirmée",  // Changement effectué ici pour que la clé soit 'detail'
+            "detail": "Inscription confirmée",
             "numero": pending["numero"],
             "type_compte": pending["type_compte"],
             "codeCompte": codeCompte
