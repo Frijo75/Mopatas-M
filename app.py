@@ -479,6 +479,9 @@ class ConfirmRequest(BaseModel):
             return v.lower() == "yes"
         return v
 
+##################################
+#   Confirmation d'inscription   #
+##################################
 @app.post("/confirm_inscription")
 async def confirm_inscription_endpoint(data: ConfirmRequest):
     try:
@@ -514,7 +517,7 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
         
         logger.info(f"Inscription confirmée pour {pending['numero']}")
         return {
-            "message": "Inscription confirmée",
+            "detail": "Inscription confirmée",  // Changement effectué ici pour que la clé soit 'detail'
             "numero": pending["numero"],
             "type_compte": pending["type_compte"],
             "codeCompte": codeCompte
@@ -525,6 +528,7 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
     except Exception as e:
         logger.error(f"Erreur lors de la confirmation de l'inscription: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # 3. Recup_inscription : Récupérer un utilisateur et mettre à jour son codeCompte
