@@ -590,19 +590,16 @@ async def balance_pro_endpoint(request: Request):
          "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!",
          "premium_services": premium_list
     }
-
-
 @app.post("/transaction")
 async def transaction_endpoint(request: Request):
     data = await request.json()
-    numero_destinataire = data.get('numero_destinataire')
-    numero_envoyeur = data.get('numero_envoyeur')
+    # On reçoit la chaîne complète depuis Flutter (ex: "numero;id_paie;code_paie")
+    numero_destinataire = data.get('num_destinataire')
+    numero_envoyeur = data.get('num_envoyeur')
     montant = data.get('montant')
     pass_word = data.get('pass_word')
     transaction_type = data.get('transaction_type')
-    code_paie = data.get('code_paie')
-    id_paie = data.get('id_paie')
-    codeCompte_req = data.get('codeCompte')
+    codeCompte_req = data.get('codeCompte')  # Ce champ reste tel quel
 
     if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
         raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis")
@@ -614,6 +611,7 @@ async def transaction_endpoint(request: Request):
         raise HTTPException(status_code=400, detail="codeCompte invalide")
 
     code_session = generate_session_code()
+    # On enregistre la transaction sans modifier num_destinataire
     insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
 
     recipient_name = "Inconnu"
@@ -622,15 +620,17 @@ async def transaction_endpoint(request: Request):
         if recipient:
             recipient_name = recipient['nom']
     elif transaction_type in ['liquider', 'paie']:
+        # Pour l'affichage, on extrait la première partie (le numéro)
         parts = numero_destinataire.split(';')
         if len(parts) >= 1:
-            destinataire_phone = parts[0].strip()
-            recipient = get_user_by_number(destinataire_phone)
+            recipient = get_user_by_number(parts[0].strip())
             if recipient:
                 recipient_name = recipient['nom']
 
     confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ?"
     return {"message": confirmation_message, "code_session": code_session}
+
+
 
 @app.post("/confirm_transaction")
 async def confirm_transaction_endpoint(request: Request):
@@ -638,9 +638,13 @@ async def confirm_transaction_endpoint(request: Request):
     code_session = data.get('code_session')
     if not code_session:
         raise HTTPException(status_code=400, detail="Le code de session est requis")
-    code_paie = data.get('code_paie')
-    id_paie = data.get('id_paie')
+    
+    # Vérifier la confirmation de l'utilisateur
+    confirmation = data.get('confirmation')
+    if confirmation != "yes":
+        raise HTTPException(status_code=400, detail="Transaction non confirmée par l'utilisateur")
 
+    # Récupérer la transaction enregistrée
     transaction_data = validate_transaction(code_session)
     if transaction_data is None:
         raise HTTPException(status_code=400, detail="Code de session invalide, expiré ou transaction déjà confirmée")
@@ -650,10 +654,36 @@ async def confirm_transaction_endpoint(request: Request):
     montant = transaction_data['montant']
     transaction_type = transaction_data['type']
 
-    result, status_code = process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, code_paie, id_paie)
+    # Extraction des informations de paiement dans la confirmation
+    code_paie = None
+    id_paie = None
+    if transaction_type in ['liquider', 'paie']:
+        parts = numero_destinataire.split(';')
+        if len(parts) >= 3:
+            # La première partie est le vrai numéro, la deuxième est id_paie, la troisième est code_paie
+            numero_destinataire = parts[0].strip()
+            id_paie = parts[1].strip()
+            code_paie = parts[2].strip()
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail="Format de num_destinataire invalide. Attendu: <numero>;<id_paie>;<code_paie>"
+            )
+
+    result, status_code = process_transaction(
+        numero_envoyeur, 
+        numero_destinataire, 
+        montant, 
+        transaction_type, 
+        code_session, 
+        code_paie, 
+        id_paie
+    )
     if status_code != 200:
         raise HTTPException(status_code=status_code, detail=result.get('error', 'Erreur'))
     return result
+
+
 
 if __name__ == "__main__":
     init_db()  # Initialise la base de données
