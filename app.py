@@ -6,6 +6,11 @@ import logging
 from pydantic import BaseModel, validator
 from typing import Union
 import re
+from typing import Union, Tuple
+import random, string
+from typing import List
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -467,6 +472,32 @@ async def inscription_endpoint(data: dict):
         return {"message": confirmation_message, "code_session": code_session}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+class TransactionRequest(BaseModel):
+    num_destinataire: str
+    num_envoyeur: str
+    montant: Union[float, int, str]
+    pass_word: str
+    transaction_type: str
+    codeCompte: str
+
+    @validator("montant", pre=True)
+    def parse_montant(cls, v):
+        try:
+            return float(v)
+        except ValueError:
+            raise ValueError("Le champ 'montant' doit être un nombre valide.")
+
+class ConfirmTransactionRequest(BaseModel):
+    code_session: str
+    confirmation: Union[bool, str]
+
+    @validator("confirmation", pre=True)
+    def parse_confirmation(cls, v):
+        if isinstance(v, str):
+            return v.lower() == "yes"
+        return bool(v)
+
 # 2. Confirm_inscription : Confirmation et insertion dans la table users
 
 class ConfirmRequest(BaseModel):
@@ -553,74 +584,98 @@ async def recup_inscription_endpoint(request: Request):
         "codeCompte": codeCompte
     }
 
+# Modèle pour les requêtes de solde
+class BalanceRequest(BaseModel):
+    numero: str
+    pass_word: str
+    codeCompte: str
+
+
+
 @app.post("/balance")
-async def balance_endpoint(request: Request):
-    data = await request.json()
-    numero = data.get('numero')
-    codeCompte_req = data.get('codeCompte')
-    user = get_user_by_number(numero)
-    if user and data.get('pass_word') == user['pass_word']:
-        if user.get('codeCompte') is not None and codeCompte_req != user.get('codeCompte'):
-            raise HTTPException(status_code=400, detail="codeCompte invalide")
-        return [{
-            "solde": user['solde'],
-            "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!"
-        }]
-    else:
-        raise HTTPException(status_code=400, detail="Echec de vérification de solde ou mot de passe incorrect")
+async def balance_endpoint(data: BalanceRequest):
+    user = get_user_by_number(data.numero)
+    if user is None or user.get("pass_word") != data.pass_word:
+        raise HTTPException(
+            status_code=400,
+            detail="Echec de vérification de solde ou mot de passe incorrect"
+        )
+    if user.get("codeCompte") is not None and data.codeCompte != user.get("codeCompte"):
+        raise HTTPException(status_code=400, detail="codeCompte invalide")
+    
+    return {
+        "solde": user["solde"],
+        "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!"
+    }
 
 @app.post("/balance_pro")
-async def balance_pro_endpoint(request: Request):
-    data = await request.json()
-    numero = data.get('numero')
-    codeCompte_req = data.get('codeCompte')
-    user = get_user_by_number(numero)
-    if not user or data.get('pass_word') != user['pass_word']:
-        raise HTTPException(status_code=400, detail="Utilisateur non trouvé ou mot de passe incorrect")
-    if user.get('codeCompte') is not None and codeCompte_req != user.get('codeCompte'):
+async def balance_pro_endpoint(data: BalanceRequest):
+    user = get_user_by_number(data.numero)
+    if user is None or data.pass_word != user.get("pass_word"):
+        raise HTTPException(
+            status_code=400,
+            detail="Utilisateur non trouvé ou mot de passe incorrect"
+        )
+    if user.get("codeCompte") is not None and data.codeCompte != user.get("codeCompte"):
         raise HTTPException(status_code=400, detail="codeCompte invalide")
+    
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id_paiement, id_payeur, transaction_hash FROM premium_services WHERE id_payeur = ?", (user['numero'],))
+    cursor.execute(
+        "SELECT id_paiement, id_payeur FROM premium_services WHERE id_payeur = ?",
+        (user['numero'],)
+    )
     premium_services = cursor.fetchall()
     conn.close()
-    premium_list = [{"id_paiement": row["id_paiement"], "id_payeur": row["id_payeur"], "transaction_hash": row["transaction_hash"]} for row in premium_services]
+    
+    premium_list = [
+        {
+            "id_paiement": row["id_paiement"],
+            "id_payeur": row["id_payeur"]
+          
+        }
+        for row in premium_services
+    ]
+    
     return {
          "solde": user["solde"],
          "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!",
          "premium_services": premium_list
     }
+    
+#################################
+# Endpoints FastAPI
+#################################
+
 @app.post("/transaction")
-async def transaction_endpoint(request: Request):
-    data = await request.json()
-    # On reçoit la chaîne complète depuis Flutter (ex: "numero;id_paie;code_paie")
-    numero_destinataire = data.get('num_destinataire')
-    numero_envoyeur = data.get('num_envoyeur')
-    montant = data.get('montant')
-    pass_word = data.get('pass_word')
-    transaction_type = data.get('transaction_type')
-    codeCompte_req = data.get('codeCompte')  # Ce champ reste tel quel
+async def transaction_endpoint(data: TransactionRequest):
+    numero_destinataire = data.num_destinataire
+    numero_envoyeur = data.num_envoyeur
+    montant = data.montant
+    pass_word = data.pass_word
+    transaction_type = data.transaction_type
+    codeCompte_req = data.codeCompte
 
     if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
-        raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis")
+        raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis.")
 
     sender = get_user_by_number(numero_envoyeur)
     if not sender or sender['pass_word'] != pass_word:
-        raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur non trouvé")
+        raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur inexistant.")
+
     if sender.get("codeCompte") is not None and codeCompte_req != sender.get("codeCompte"):
-        raise HTTPException(status_code=400, detail="codeCompte invalide")
+        raise HTTPException(status_code=400, detail="Le codeCompte fourni ne correspond pas à l'utilisateur.")
 
     code_session = generate_session_code()
-    # On enregistre la transaction sans modifier num_destinataire
     insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
 
+    # Récupération du nom du destinataire pour afficher un message clair
     recipient_name = "Inconnu"
     if transaction_type in ['retrait', 'envoi', 'depot', 'depot_pro']:
         recipient = get_user_by_number(numero_destinataire)
         if recipient:
             recipient_name = recipient['nom']
     elif transaction_type in ['liquider', 'paie']:
-        # Pour l'affichage, on extrait la première partie (le numéro)
         parts = numero_destinataire.split(';')
         if len(parts) >= 1:
             recipient = get_user_by_number(parts[0].strip())
@@ -630,57 +685,53 @@ async def transaction_endpoint(request: Request):
     confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ?"
     return {"message": confirmation_message, "code_session": code_session}
 
-
-
 @app.post("/confirm_transaction")
-async def confirm_transaction_endpoint(request: Request):
-    data = await request.json()
-    code_session = data.get('code_session')
-    if not code_session:
-        raise HTTPException(status_code=400, detail="Le code de session est requis")
-    
-    # Vérifier la confirmation de l'utilisateur
-    confirmation = data.get('confirmation')
-    if confirmation != "yes":
-        raise HTTPException(status_code=400, detail="Transaction non confirmée par l'utilisateur")
+async def confirm_transaction_endpoint(data: ConfirmTransactionRequest):
+    code_session = data.code_session
+    confirmation = data.confirmation  # True si l'utilisateur a répondu "yes"
 
-    # Récupérer la transaction enregistrée
+    if not code_session:
+        raise HTTPException(status_code=400, detail="Le code de session est requis.")
+
+    if not confirmation:
+        raise HTTPException(status_code=400, detail="Transaction non confirmée par l'utilisateur.")
+
     transaction_data = validate_transaction(code_session)
     if transaction_data is None:
-        raise HTTPException(status_code=400, detail="Code de session invalide, expiré ou transaction déjà confirmée")
+        raise HTTPException(status_code=400, detail="Code de session invalide, expiré ou transaction déjà confirmée.")
 
     numero_envoyeur = transaction_data['numero_envoyeur']
     numero_destinataire = transaction_data['numero_destinataire']
     montant = transaction_data['montant']
     transaction_type = transaction_data['type']
 
-    # Extraction des informations de paiement dans la confirmation
+    # Extraction d'informations supplémentaires pour certains types de transactions
     code_paie = None
     id_paie = None
     if transaction_type in ['liquider', 'paie']:
         parts = numero_destinataire.split(';')
         if len(parts) >= 3:
-            # La première partie est le vrai numéro, la deuxième est id_paie, la troisième est code_paie
             numero_destinataire = parts[0].strip()
             id_paie = parts[1].strip()
             code_paie = parts[2].strip()
         else:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail="Format de num_destinataire invalide. Attendu: <numero>;<id_paie>;<code_paie>"
             )
 
     result, status_code = process_transaction(
-        numero_envoyeur, 
-        numero_destinataire, 
-        montant, 
-        transaction_type, 
-        code_session, 
-        code_paie, 
+        numero_envoyeur,
+        numero_destinataire,
+        montant,
+        transaction_type,
+        code_session,
+        code_paie,
         id_paie
     )
+
     if status_code != 200:
-        raise HTTPException(status_code=status_code, detail=result.get('error', 'Erreur'))
+        raise HTTPException(status_code=status_code, detail=result.get('error', 'Erreur lors du traitement.'))
     return result
 
 
