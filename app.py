@@ -690,7 +690,7 @@ async def transaction_endpoint(data: dict):
 
     # Générer le code de session et insérer la transaction en mode 'pending'
     code_session = generate_session_code()
-    insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
+    #insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
 
     # Récupérer le nom du destinataire pour afficher un message clair
     recipient_name = "Inconnu"
