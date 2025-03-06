@@ -1,16 +1,19 @@
-import os, uuid, json, sqlite3, math
+import os
+import uuid
+import json
+import sqlite3
+import math
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 from pydantic import BaseModel, validator
-from typing import Union
+from typing import Union, Tuple, List
 import re
-from typing import Union, Tuple
-import random, string
-from typing import List
+import random
+import string
 
-
+# Configuration du logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -59,110 +62,102 @@ def validate_phone(numero: str):
 # Base de données SQLite et initialisation
 #####################################
 def get_db_connection():
+    DATABASE = os.path.join(os.getcwd(), "mopatas.db")
+    logger.info(f"Database path: {DATABASE}")
     try:
-        DATABASE = os.path.join(os.getcwd(), "mopatas.db")
-        print(f"Database path: {DATABASE}")
         conn = sqlite3.connect(DATABASE)
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as e:
-        print(f"Erreur SQLite: {e}")
-        return None
+        logger.error(f"Erreur SQLite: {e}")
+        raise HTTPException(status_code=500, detail="Connexion à la base de données échouée")
 
 def get_company_account():
     conn = get_db_connection()
-    if conn is None:
-        raise HTTPException(status_code=500, detail="Connexion à la base de données échouée")
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM company_account WHERE id = 1")
-    company = cursor.fetchone()
-    conn.close()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM company_account WHERE id = 1")
+        company = cursor.fetchone()
     return company
 
 def init_db():
     conn = get_db_connection()
-    if conn is None:
-        raise HTTPException(status_code=500, detail="Connexion à la base de données échouée")
-    cursor = conn.cursor()
-    # Table des utilisateurs
-    cursor.execute('''
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nom TEXT NOT NULL,
-        numero TEXT UNIQUE NOT NULL,
-        pass_word TEXT NOT NULL,
-        solde REAL NOT NULL,
-        type_compte TEXT NOT NULL DEFAULT 'standard',
-        codeCompte TEXT
-      )
-    ''')
-    conn.commit()
-    # Table des transactions
-    cursor.execute('''
-      CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        numero_envoyeur TEXT NOT NULL,
-        numero_destinataire TEXT NOT NULL,
-        montant REAL NOT NULL,
-        type TEXT NOT NULL,
-        code_session TEXT UNIQUE NOT NULL,
-        status TEXT NOT NULL,
-        transaction_hash TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    ''')
-    conn.commit()
-    # Table des inscriptions en attente
-    cursor.execute('''
-      CREATE TABLE IF NOT EXISTS pending_registrations (
-         id INTEGER PRIMARY KEY AUTOINCREMENT,
-         code_session TEXT UNIQUE NOT NULL,
-         nom TEXT NOT NULL,
-         numero TEXT NOT NULL,
-         pass_word TEXT NOT NULL,
-         type_compte TEXT NOT NULL DEFAULT 'standard',
-         solde REAL NOT NULL,
-         code_entite TEXT,
-         codeCompte TEXT,
-         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    ''')
-    conn.commit()
-    # Table du compte d'entreprise
-    cursor.execute('''
-      CREATE TABLE IF NOT EXISTS company_account (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        solde REAL NOT NULL,
-        pass_word TEXT NOT NULL
-      )
-    ''')
-    conn.commit()
-    cursor.execute("SELECT COUNT(*) as count FROM company_account")
-    row = cursor.fetchone()
-    if row["count"] == 0:
-        config_file = os.path.join(os.getcwd(), "config.json")
-        if os.path.exists(config_file):
-            with open(config_file, "r") as f:
-                config = json.load(f)
-            company_config = config.get("company_account", {})
-            company_solde = float(company_config.get("solde", 2000000.0))
-            company_password = company_config.get("pass_word", "adminpassword")
-        else:
-            company_solde = 2000000.0
-            company_password = "adminpassword"
-        cursor.execute("INSERT INTO company_account (solde, pass_word) VALUES (?, ?)", 
-                       (company_solde, company_password))
-        conn.commit()
-    # Table premium_services
-    cursor.execute('''
-      CREATE TABLE IF NOT EXISTS premium_services (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_paiement TEXT NOT NULL,
-        id_payeur TEXT NOT NULL,
-        transaction_hash TEXT NOT NULL
-      )
-    ''')
-    conn.commit()
+    with conn:
+        cursor = conn.cursor()
+        # Table des utilisateurs
+        cursor.execute('''
+          CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT NOT NULL,
+            numero TEXT UNIQUE NOT NULL,
+            pass_word TEXT NOT NULL,
+            solde REAL NOT NULL,
+            type_compte TEXT NOT NULL DEFAULT 'standard',
+            codeCompte TEXT
+          )
+        ''')
+        # Table des transactions
+        cursor.execute('''
+          CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_envoyeur TEXT NOT NULL,
+            numero_destinataire TEXT NOT NULL,
+            montant REAL NOT NULL,
+            "type" TEXT NOT NULL,
+            code_session TEXT UNIQUE NOT NULL,
+            status TEXT NOT NULL,
+            transaction_hash TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        ''')
+        # Table des inscriptions en attente
+        cursor.execute('''
+          CREATE TABLE IF NOT EXISTS pending_registrations (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             code_session TEXT UNIQUE NOT NULL,
+             nom TEXT NOT NULL,
+             numero TEXT NOT NULL,
+             pass_word TEXT NOT NULL,
+             type_compte TEXT NOT NULL DEFAULT 'standard',
+             solde REAL NOT NULL,
+             code_entite TEXT,
+             codeCompte TEXT,
+             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        ''')
+        # Table du compte d'entreprise
+        cursor.execute('''
+          CREATE TABLE IF NOT EXISTS company_account (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            solde REAL NOT NULL,
+            pass_word TEXT NOT NULL
+          )
+        ''')
+        # Table premium_services
+        cursor.execute('''
+          CREATE TABLE IF NOT EXISTS premium_services (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_paiement TEXT NOT NULL,
+            id_payeur TEXT NOT NULL,
+            transaction_hash TEXT NOT NULL
+          )
+        ''')
+        # Insertion du compte d'entreprise s'il n'existe pas
+        cursor.execute("SELECT COUNT(*) as count FROM company_account")
+        row = cursor.fetchone()
+        if row["count"] == 0:
+            config_file = os.path.join(os.getcwd(), "config.json")
+            if os.path.exists(config_file):
+                with open(config_file, "r") as f:
+                    config = json.load(f)
+                company_config = config.get("company_account", {})
+                company_solde = float(company_config.get("solde", 2000000.0))
+                company_password = company_config.get("pass_word", "adminpassword")
+            else:
+                company_solde = 2000000.0
+                company_password = "adminpassword"
+            cursor.execute("INSERT INTO company_account (solde, pass_word) VALUES (?, ?)", 
+                           (company_solde, company_password))
     conn.close()
 
 #####################################
@@ -170,122 +165,103 @@ def init_db():
 #####################################
 def insert_user(nom, numero, pass_word, type_compte="standard", solde=0.0, codeCompte=None):
     conn = get_db_connection()
-    if conn is None:
-        return False  # Échec de la connexion
-
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO users (nom, numero, pass_word, solde, type_compte, codeCompte)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (nom, numero, pass_word, solde, type_compte, codeCompte))
-        conn.commit()
-        print("Utilisateur enregistré avec succès !")
-        return True
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO users (nom, numero, pass_word, solde, type_compte, codeCompte)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (nom, numero, pass_word, solde, type_compte, codeCompte))
+            logger.info("Utilisateur enregistré avec succès !")
+            return True
     except sqlite3.IntegrityError:
-        print("Erreur : Le numéro est déjà utilisé.")
+        logger.error("Erreur : Le numéro est déjà utilisé.")
         return False
     except sqlite3.Error as e:
-        print(f"Erreur SQLite : {e}")
+        logger.error(f"Erreur SQLite : {e}")
         return False
     finally:
         conn.close()
 
 def get_user_by_number(numero):
     conn = get_db_connection()
-    if conn is None:
-        return None
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE numero = ?", (numero,))
-    user = cursor.fetchone()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE numero = ?", (numero,))
+        user = cursor.fetchone()
     conn.close()
     return user
 
 def update_user_balance(numero, new_balance):
     conn = get_db_connection()
-    if conn is None:
-        return
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET solde = ? WHERE numero = ?", (new_balance, numero))
-    conn.commit()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET solde = ? WHERE numero = ?", (new_balance, numero))
     conn.close()
 
 def update_user_code(numero, codeCompte):
     conn = get_db_connection()
-    if conn is None:
-        return
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET codeCompte = ? WHERE numero = ?", (codeCompte, numero))
-    conn.commit()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET codeCompte = ? WHERE numero = ?", (codeCompte, numero))
     conn.close()
 
 def update_company_account(amount):
     conn = get_db_connection()
-    if conn is None:
-        return
-    cursor = conn.cursor()
-    cursor.execute("UPDATE company_account SET solde = solde + ? WHERE id = 1", (amount,))
-    conn.commit()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE company_account SET solde = solde + ? WHERE id = 1", (amount,))
     conn.close()
 
 def insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session):
     conn = get_db_connection()
-    if conn is None:
-        return
-    cursor = conn.cursor()
-    cursor.execute("""
-      INSERT INTO transactions (numero_envoyeur, numero_destinataire, montant, type, code_session, status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    """, (numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, 'pending'))
-    conn.commit()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+          INSERT INTO transactions (numero_envoyeur, numero_destinataire, montant, "type", code_session, status)
+          VALUES (?, ?, ?, ?, ?, ?)
+        """, (numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, 'pending'))
     conn.close()
 
 def validate_transaction(code_session):
     conn = get_db_connection()
-    if conn is None:
-        return None
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM transactions WHERE code_session = ? AND status = 'pending'", (code_session,))
-    transaction = cursor.fetchone()
-    if transaction:
-        if is_session_expired(transaction["timestamp"]):
-            cursor.execute("UPDATE transactions SET status = 'expired' WHERE code_session = ?", (code_session,))
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM transactions WHERE code_session = ? AND status = 'pending'", (code_session,))
+        transaction = cursor.fetchone()
+        if transaction:
+            if is_session_expired(transaction["timestamp"]):
+                cursor.execute("UPDATE transactions SET status = 'expired' WHERE code_session = ?", (code_session,))
+                conn.commit()
+                conn.close()
+                return None
+            cursor.execute("UPDATE transactions SET status = 'completed' WHERE code_session = ?", (code_session,))
             conn.commit()
-            conn.close()
-            return None
-        cursor.execute("UPDATE transactions SET status = 'completed' WHERE code_session = ?", (code_session,))
-        conn.commit()
-        conn.close()
-        return transaction
     conn.close()
-    return None
+    return transaction
 
 def insert_pending_registration(code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte):
     conn = get_db_connection()
-    if conn is None:
-        return
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO pending_registrations (code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                   (code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte))
-    conn.commit()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO pending_registrations (code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                       (code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte))
     conn.close()
 
 def get_pending_registration(code_session):
     conn = get_db_connection()
-    if conn is None:
-        return None
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM pending_registrations WHERE code_session = ?", (code_session,))
-    pending = cursor.fetchone()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pending_registrations WHERE code_session = ?", (code_session,))
+        pending = cursor.fetchone()
     conn.close()
     return pending
 
 def delete_pending_registration(code_session):
     conn = get_db_connection()
-    if conn is None:
-        return
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM pending_registrations WHERE code_session = ?", (code_session,))
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM pending_registrations WHERE code_session = ?", (code_session,))
     conn.commit()
     conn.close()
 
@@ -293,11 +269,11 @@ def is_session_expired(timestamp_str):
     try:
         session_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
     except Exception as e:
-        print(f"Erreur de conversion du timestamp '{timestamp_str}': {e}")
-        raise
-    now = datetime.utcnow()  # ou datetime.now() si vous travaillez en local
+        logger.error(f"Erreur de conversion du timestamp '{timestamp_str}': {e}")
+        raise HTTPException(status_code=500, detail="Erreur lors de la conversion du timestamp")
+    now = datetime.utcnow()  # Utilisation de l'heure UTC pour la cohérence
     expiration_time = session_time + timedelta(minutes=10)
-    print(f"Session time: {session_time}, Expiration time: {expiration_time}, Now: {now}")
+    logger.info(f"Session time: {session_time}, Expiration time: {expiration_time}, Now: {now}")
     return now > expiration_time
 
 def calculate_fees(montant, transaction_type):
@@ -341,11 +317,11 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         update_company_account(montant + fee)
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
-        if conn:
+        with conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
-            conn.close()
+        conn.close()
         return {'message': 'Transaction de retrait réussie', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     elif transaction_type == 'envoi':
@@ -359,11 +335,11 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             update_user_balance(numero_destinataire, new_recipient_balance)
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
-        if conn:
+        with conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
-            conn.close()
+        conn.close()
         return {'message': 'Envoi réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     elif transaction_type in ['liquider', 'paie']:
@@ -392,18 +368,19 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         update_company_account(fee - bonus)
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
-        if conn:
+        with conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
-            conn.close()
+        conn.close()
+        # Insertion dans la table premium_services
         conn = get_db_connection()
-        if conn:
+        with conn:
             cursor = conn.cursor()
             cursor.execute("INSERT INTO premium_services (id_paiement, id_payeur, transaction_hash) VALUES (?, ?, ?)",
                            (code_paie_received, id_paie_received, transaction_hash))
             conn.commit()
-            conn.close()
+        conn.close()
         return {'message': 'Transaction de liquider/payer réussie', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     elif transaction_type == 'depot':
@@ -417,22 +394,22 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             update_user_balance(numero_destinataire, new_recipient_balance)
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
-        if conn:
+        with conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
-            conn.close()
+        conn.close()
         return {'message': 'Dépôt réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     elif transaction_type == 'depot_pro':
         if sender['type_compte'] not in ['agent', 'premium']:
             return {'error': 'Le compte de l\'envoyeur n\'est pas un agent valide pour depot_pro'}, 400
         conn = get_db_connection()
-        if conn:
+        with conn:
             cursor = conn.cursor()
             cursor.execute("SELECT solde FROM company_account WHERE id = 1")
             company = cursor.fetchone()
-            conn.close()
+        conn.close()
         if not company or company["solde"] < montant:
             return {'error': 'Fonds insuffisants dans le compte d\'entreprise pour le dépôt pro'}, 400
         update_company_account(-montant)
@@ -440,11 +417,11 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         update_user_balance(numero_envoyeur, new_sender_balance)
         transaction_hash = str(uuid.uuid4())
         conn = get_db_connection()
-        if conn:
+        with conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
-            conn.close()
+        conn.close()
         return {'message': 'Dépôt pro réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
     else:
@@ -682,7 +659,6 @@ async def balance_pro_endpoint(data: BalanceRequest):
 #################################
 # Endpoints FastAPI
 #################################
-
 @app.post("/transaction")
 async def transaction_endpoint(data: TransactionRequest):
     numero_destinataire = data.num_destinataire
@@ -695,17 +671,28 @@ async def transaction_endpoint(data: TransactionRequest):
     if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
         raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis.")
 
+    # Récupérer l'utilisateur expéditeur
     sender = get_user_by_number(numero_envoyeur)
-    if not sender or sender['pass_word'] != pass_word:
+    logger.info(f"Recherche de l'utilisateur pour {numero_envoyeur}: {sender}")
+    if not sender:
+        logger.error(f"Utilisateur avec le numéro {numero_envoyeur} non trouvé.")
         raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur inexistant.")
 
+    # Vérifier le mot de passe
+    if sender['pass_word'] != pass_word:
+        logger.error(f"Mot de passe incorrect pour {numero_envoyeur}. Stocké: {sender['pass_word']} / Fourni: {pass_word}")
+        raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur inexistant.")
+
+    # Vérifier la correspondance du codeCompte si présent
     if sender.get("codeCompte") is not None and codeCompte_req != sender.get("codeCompte"):
+        logger.error(f"CodeCompte fourni ({codeCompte_req}) ne correspond pas à celui de l'utilisateur ({sender.get('codeCompte')}).")
         raise HTTPException(status_code=400, detail="Le codeCompte fourni ne correspond pas à l'utilisateur.")
 
+    # Générer le code de session et insérer la transaction en mode 'pending'
     code_session = generate_session_code()
     insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
 
-    # Récupération du nom du destinataire pour afficher un message clair
+    # Récupérer le nom du destinataire pour afficher un message clair
     recipient_name = "Inconnu"
     if transaction_type in ['retrait', 'envoi', 'depot', 'depot_pro']:
         recipient = get_user_by_number(numero_destinataire)
@@ -719,7 +706,9 @@ async def transaction_endpoint(data: TransactionRequest):
                 recipient_name = recipient['nom']
 
     confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ?"
+    logger.info(f"Transaction en attente, code_session: {code_session} - Message: {confirmation_message}")
     return {"message": confirmation_message, "code_session": code_session}
+
 
 @app.post("/confirm_transaction")
 async def confirm_transaction_endpoint(data: ConfirmTransactionRequest):
@@ -741,7 +730,7 @@ async def confirm_transaction_endpoint(data: ConfirmTransactionRequest):
     montant = transaction_data['montant']
     transaction_type = transaction_data['type']
 
-    # Extraction d'informations supplémentaires pour certains types de transactions
+    # Extraction d'informations supplémentaires pour les transactions 'liquider' ou 'paie'
     code_paie = None
     id_paie = None
     if transaction_type in ['liquider', 'paie']:
@@ -767,8 +756,11 @@ async def confirm_transaction_endpoint(data: ConfirmTransactionRequest):
     )
 
     if status_code != 200:
+        logger.error(f"Erreur lors du traitement de la transaction: {result.get('error')}")
         raise HTTPException(status_code=status_code, detail=result.get('error', 'Erreur lors du traitement.'))
+    logger.info(f"Transaction confirmée: {result}")
     return result
+
 
 
 
