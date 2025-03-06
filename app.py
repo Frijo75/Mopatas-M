@@ -660,13 +660,13 @@ async def balance_pro_endpoint(data: BalanceRequest):
 # Endpoints FastAPI
 #################################
 @app.post("/transaction")
-async def transaction_endpoint(data: TransactionRequest):
-    numero_destinataire = data.num_destinataire
-    numero_envoyeur = data.num_envoyeur
-    montant = data.montant
-    pass_word = data.pass_word
-    transaction_type = data.transaction_type
-    codeCompte_req = data.codeCompte
+async def transaction_endpoint(data: dict):
+    numero_destinataire = data.get("num_destinataire")
+    numero_envoyeur = data.get("num_envoyeur")
+    montant = data.get("montant")
+    pass_word = data.get("pass_word")
+    transaction_type = data.get("transaction_type")
+    codeCompte_req = data.get("codeCompte")
 
     if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
         raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis.")
