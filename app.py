@@ -629,7 +629,7 @@ async def balance_pro_endpoint(data: dict):
             status_code=400,
             detail="Utilisateur non trouvé ou mot de passe incorrect"
         )
-    if user.["codeCompte"] is not None and data.get('codeCompte') != user["codeCompte"]:
+    if user["codeCompte"] is not None and data.get('codeCompte') != user["codeCompte"]:
         raise HTTPException(status_code=400, detail="codeCompte invalide")
     
     conn = get_db_connection()
