@@ -690,7 +690,7 @@ async def transaction_endpoint(data: dict):
         raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur inexistant.")
 
     # Vérifier la correspondance du codeCompte si présent
-    if sender.get("codeCompte") is not None and codeCompte_req != sender["codeCompte"]:
+    if sender["codeCompte"] is not None and codeCompte_req != sender["codeCompte"]:
         logger.error(f"CodeCompte fourni ({codeCompte_req}) ne correspond pas à celui de l'utilisateur.")
         raise HTTPException(status_code=400, detail="Le codeCompte fourni ne correspond pas à l'utilisateur.")
 
