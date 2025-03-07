@@ -658,136 +658,99 @@ async def balance_pro_endpoint(data: dict):
          "premium_services": premium_list
     }
     
-#################################
-# Endpoints FastAPI
-#################################
+
+#####################################
+# Endpoint de création de transaction
+#####################################
 @app.post("/transaction")
-async def transaction_endpoint(data: dict):
-    logger.info(f"Requête transaction reçue: {data}")
-    # Récupération des données envoyées depuis Flutter
-    raw_num_destinataire = data.get("num_destinataire")
-    numero_envoyeur = data.get("num_envoyeur")
-    montant = data.get("montant")
-    pass_word = data.get("pass_word")
-    transaction_type = data.get("transaction_type")
-    codeCompte_req = data.get("codeCompte")
-
-    if not raw_num_destinataire or not montant or not transaction_type:
-        raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis.")
-
-    # Découper num_destinataire s'il contient ';'
-    if ";" in raw_num_destinataire:
-        parts = raw_num_destinataire.split(";")
-        numero_destinataire = parts[0].strip()
+def create_transaction(data: dict):
+    # Récupération des données envoyées
+    num_destinataire = data.get('num_destinataire')
+    montant = data.get('montant')
+    pass_word = data.get('pass_word')
+    transaction_type = data.get('transaction_type')
+    codeCompte = data.get('codeCompte')
+    num_envoyeur = data.get('num_envoyeur')
+    
+    # Vérification que tous les champs sont présents
+    if not all([num_destinataire, montant, pass_word, transaction_type, codeCompte, num_envoyeur]):
+        raise HTTPException(status_code=400, detail="Tous les champs doivent être renseignés")
+    
+    # Valider le format du numéro de l'envoyeur
+    validate_phone(num_envoyeur)
+    
+    # Vérifier l'existence de l'envoyeur et la correspondance du mot de passe
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE numero = ?", (num_envoyeur,))
+        sender = cursor.fetchone()
+        if not sender:
+            raise HTTPException(status_code=404, detail="Numéro de l'envoyeur introuvable")
+        # Vérifier le mot de passe
+        if sender['pass_word'] != pass_word:
+            raise HTTPException(status_code=401, detail="Mot de passe incorrect pour l'envoyeur")
+    
+    # Traitement du numéro du destinataire : découpage si présence de ';'
+    if ';' in num_destinataire:
+        destinataire_split = num_destinataire.split(';')
+        num_dest = destinataire_split[0].strip()
     else:
-        numero_destinataire = raw_num_destinataire.strip()
-
-    # Vérifier que le destinataire existe dans la base
-    recipient_user = get_user_by_number(numero_destinataire)
-    if not recipient_user:
-        logger.error(f"Destinataire avec le numéro {numero_destinataire} non trouvé.")
-        raise HTTPException(status_code=400, detail="Destinataire inexistant.")
-
-    # Récupérer l'utilisateur expéditeur à partir du codeCompte
-    sender = get_user_by_number(str(codeCompte_req))
-    logger.info(f"Recherche de l'utilisateur pour {numero_envoyeur}: {sender}")
-    if not sender:
-        logger.error(f"Utilisateur avec le numéro {numero_envoyeur} non trouvé.")
-        raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur inexistant.")
-
-    # Vérifier le mot de passe de l'expéditeur
-    if sender['pass_word'] != pass_word:
-        logger.error(f"Mot de passe incorrect pour {numero_envoyeur}.")
-        raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur inexistant.")
-
-    # Vérifier la correspondance du codeCompte si celui-ci est défini
-    if sender.get("codeCompte") is not None and codeCompte_req != sender["codeCompte"]:
-        logger.error(f"CodeCompte fourni ({codeCompte_req}) ne correspond pas à celui de l'utilisateur.")
-        raise HTTPException(status_code=400, detail="Le codeCompte fourni ne correspond pas à l'utilisateur.")
-
-    # Générer le code de session et insérer la transaction en mode 'pending'
+        num_dest = num_destinataire.strip()
+        
+    # Valider le format du numéro destinataire
+    validate_phone(num_dest)
+    
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE numero = ?", (num_dest,))
+        recipient = cursor.fetchone()
+        if not recipient:
+            raise HTTPException(status_code=404, detail="Numéro du destinataire introuvable")
+    
+    # Générer un code de session pour la transaction
     code_session = generate_session_code()
-    logger.info(
-        f"Insertion de la transaction en attente: "
-        f"expéditeur: {numero_envoyeur}, destinataire (brut): {raw_num_destinataire}, montant: {montant}, "
-        f"type: {transaction_type}, code_session: {code_session}"
-    )
-    # On conserve raw_num_destinataire pour garder les éventuelles informations complémentaires
-    insert_transaction(numero_envoyeur, raw_num_destinataire, montant, transaction_type, code_session)
-
-    # Préparer le message de confirmation avec le nom du destinataire extrait
-    recipient_name = recipient_user.get('nom', 'Inconnu')
-    confirmation_message = f"Vous demandez une transaction de {montant} FC à {recipient_name}. Confirmez-vous ?"
-    logger.info(f"Transaction en attente, code_session: {code_session} - Message: {confirmation_message}")
+    confirmation_message = "Transaction en attente de confirmation"
+    
+    # Enregistrer la transaction dans la base de données avec état "pending"
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO les_transactions (numero_envoyeur, numero_destinataire, montant, type_trans, code_session, etat)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (num_envoyeur, num_dest, montant, transaction_type, code_session, "pending"))
+        conn.commit()
+    
     return {"message": confirmation_message, "code_session": code_session}
 
-
+#####################################
+# Endpoint de confirmation de transaction
+#####################################
 @app.post("/confirm_transaction")
-async def confirm_transaction_endpoint(data: dict):
+def confirm_transaction(data: dict):
+    # Récupération des données de confirmation
     code_session = data.get('code_session')
-    confirmation = data.get('confirmation')  # attend 'yes' pour confirmer
-
-    if not code_session:
-        raise HTTPException(status_code=400, detail="Le code de session est requis.")
-
-    if confirmation != 'yes':
-        raise HTTPException(status_code=400, detail="Transaction non confirmée par l'utilisateur.")
-
-    transaction_data = validate_transaction(code_session)
-    if transaction_data is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Code de session invalide, expiré ou transaction déjà confirmée."
-        )
-
-    numero_envoyeur = transaction_data['numero_envoyeur']
-    raw_num_destinataire = transaction_data['numero_destinataire']  # peut contenir un ';'
-    montant = transaction_data['montant']
-    transaction_type = transaction_data['type']
-
-    # Extraction d'informations supplémentaires pour les transactions 'liquider' ou 'paie'
-    code_paie = None
-    id_paie = None
-    if transaction_type in ['liquider', 'paie']:
-        parts = raw_num_destinataire.split(';')
-        if len(parts) >= 3:
-            numero_destinataire = parts[0].strip()
-            id_paie = parts[1].strip()
-            code_paie = parts[2].strip()
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Impossible de faire la transaction car les données fournies sont incorrectes."
-            )
-    else:
-        # Pour les autres types, on découpe s'il y a le séparateur et on récupère la première partie
-        if ";" in raw_num_destinataire:
-            numero_destinataire = raw_num_destinataire.split(';')[0].strip()
-        else:
-            numero_destinataire = raw_num_destinataire.strip()
-
-    logger.info(
-        f"Confirmation de la transaction: expéditeur: {numero_envoyeur}, destinataire: {numero_destinataire}, "
-        f"montant: {montant}, type: {transaction_type}, code_session: {code_session}"
-    )
-    result, status_code = process_transaction(
-        numero_envoyeur,
-        numero_destinataire,
-        montant,
-        transaction_type,
-        code_session,
-        code_paie,
-        id_paie
-    )
-
-    if status_code != 200:
-        logger.error(f"Erreur lors du traitement de la transaction: {result.get('error')}")
-        raise HTTPException(
-            status_code=status_code,
-            detail=result.get('error', 'Erreur lors du traitement.')
-        )
-    logger.info(f"Transaction confirmée: {result}")
-    return result
+    confirmation = data.get('confirmation')
+    
+    if not code_session or confirmation != "yes":
+        raise HTTPException(status_code=400, detail="Données de confirmation invalides")
+    
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM les_transactions WHERE code_session = ?", (code_session,))
+        transaction = cursor.fetchone()
+        if not transaction:
+            raise HTTPException(status_code=404, detail="Code session invalide")
+        
+        if transaction['etat'] != "pending":
+            raise HTTPException(status_code=400, detail="Transaction déjà confirmée ou non en attente")
+        
+        # Mettre à jour l'état de la transaction de "pending" à "completed"
+        cursor.execute("UPDATE les_transactions SET etat = ? WHERE code_session = ?", ("completed", code_session))
+        conn.commit()
+    
+    return {"message": "Transaction confirmée avec succès"}
 
 
 
