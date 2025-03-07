@@ -183,11 +183,11 @@ def insert_user(nom, numero, pass_word, type_compte="standard", solde=0.0, codeC
     finally:
         conn.close()
 
-def get_user_by_number(numero):
+def get_user_by_number(codeCompte):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE numero = ?", (numero,))
+        cursor.execute("SELECT * FROM users WHERE codeCompte = ?", (codeCompte,))
         user = cursor.fetchone()
     conn.close()
     return user
@@ -324,7 +324,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn.close()
         return {'message': 'Transaction de retrait réussie', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
-    elif transaction_type == 'envoi':
+    elif transaction_type in ['envoi', 'paie']:
         if sender_balance < montant:
             return {'error': 'Solde insuffisant pour l\'envoi'}, 400
         new_sender_balance = sender_balance - montant
@@ -342,7 +342,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn.close()
         return {'message': 'Envoi réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
 
-    elif transaction_type in ['liquider', 'paie']:
+    elif transaction_type in ['liquider', 'facturer']:
         parts = numero_destinataire.split(';')
         if len(parts) < 3:
             return {'error': 'Format invalide pour liquider/payer'}, 400
@@ -607,7 +607,7 @@ class BalanceRequest(BaseModel):
 
 @app.post("/balance")
 async def balance_endpoint(data: dict):
-    user = get_user_by_number(data.get('numero'))
+    user = get_user_by_number(data.get('codeCompte'))
     if user is None or user['pass_word'] != data.get('pass_word'):
         raise HTTPException(
             status_code=400,
@@ -668,11 +668,11 @@ async def transaction_endpoint(data: dict):
     transaction_type = data.get("transaction_type")
     codeCompte_req = data.get("codeCompte")
 
-    if not numero_destinataire or not numero_envoyeur or not montant or not transaction_type:
+    if not numero_destinataire or not montant or not transaction_type:
         raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis.")
 
     # Récupérer l'utilisateur expéditeur
-    sender = get_user_by_number(numero_envoyeur)
+    sender = get_user_by_number(codeCompte_req)
     logger.info(f"Recherche de l'utilisateur pour {numero_envoyeur}: {sender}")
     if not sender:
         logger.error(f"Utilisateur avec le numéro {numero_envoyeur} non trouvé.")
