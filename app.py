@@ -662,95 +662,116 @@ async def balance_pro_endpoint(data: dict):
 #####################################
 # Endpoint de création de transaction
 #####################################
+
+#####################################
+# Endpoint /transaction
+#####################################
 @app.post("/transaction")
-def create_transaction(data: dict):
-    # Récupération des données envoyées
-    num_destinataire = data.get('num_destinataire')
-    montant = data.get('montant')
-    pass_word = data.get('pass_word')
-    transaction_type = data.get('transaction_type')
-    codeCompte = data.get('codeCompte')
-    num_envoyeur = data.get('num_envoyeur')
+async def create_transaction(data: dict):
+    # Vérification des champs attendus
+    required_fields = ['num_destinataire', 'montant', 'pass_word', 'transaction_type', 'codeCompte', 'num_envoyeur']
+    for field in required_fields:
+        if field not in data:
+            raise HTTPException(status_code=400, detail=f"Le champ {field} est requis")
     
-    # Vérification que tous les champs sont présents
-    if not all([num_destinataire, montant, pass_word, transaction_type, codeCompte, num_envoyeur]):
-        raise HTTPException(status_code=400, detail="Tous les champs doivent être renseignés")
+    num_envoyeur = data['num_envoyeur']
+    pass_word = data['pass_word']
     
-    # Valider le format du numéro de l'envoyeur
-    validate_phone(num_envoyeur)
+    # Vérifier que l'envoyeur existe
+    sender = get_user_by_number(num_envoyeur)
+    if not sender:
+        raise HTTPException(status_code=400, detail="Envoyeur non trouvé")
     
-    # Vérifier l'existence de l'envoyeur et la correspondance du mot de passe
+    # Vérifier que le mot de passe correspond
+    if sender['pass_word'] != pass_word:
+        raise HTTPException(status_code=400, detail="Mot de passe incorrect")
+    # Vous pouvez aussi utiliser validate_password(pass_word) si besoin
+
+    # Vérifier le destinataire : si le numéro contient ';' on découpe et on prend la première partie
+    num_destinataire = data['num_destinataire']
+    if ";" in num_destinataire:
+        parts = num_destinataire.split(";")
+        numero_dest = parts[0].strip()
+    else:
+        numero_dest = num_destinataire.strip()
+    
+    # Vérifier que le destinataire existe dans la base de données
+    recipient = get_user_by_number(numero_dest)
+    if not recipient:
+        raise HTTPException(status_code=400, detail="Destinataire non trouvé")
+    
+    # Vérifier la solvabilité de l'envoyeur (pour un envoi par exemple)
+    montant = float(data['montant'])
+    if data['transaction_type'] == 'envoi' and sender['solde'] < montant:
+        raise HTTPException(status_code=400, detail="Solde insuffisant pour l'envoi")
+
+    # Générer le code de session pour la transaction
+    code_session = generate_session_code()
+
+    # Insérer la transaction dans la base avec l'état "pending"
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE numero = ?", (num_envoyeur,))
-        sender = cursor.fetchone()
-        if not sender:
-            raise HTTPException(status_code=404, detail="Numéro de l'envoyeur introuvable")
-        # Vérifier le mot de passe
-        if sender['pass_word'] != pass_word:
-            raise HTTPException(status_code=401, detail="Mot de passe incorrect pour l'envoyeur")
-    
-    # Traitement du numéro du destinataire : découpage si présence de ';'
-    if ';' in num_destinataire:
-        destinataire_split = num_destinataire.split(';')
-        num_dest = destinataire_split[0].strip()
-    else:
-        num_dest = num_destinataire.strip()
-        
-    # Valider le format du numéro destinataire
-    validate_phone(num_dest)
-    
-    with conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE numero = ?", (num_dest,))
-        recipient = cursor.fetchone()
-        if not recipient:
-            raise HTTPException(status_code=404, detail="Numéro du destinataire introuvable")
-    
-    # Générer un code de session pour la transaction
-    code_session = generate_session_code()
-    confirmation_message = "Transaction en attente de confirmation"
-    
-    # Enregistrer la transaction dans la base de données avec état "pending"
-    with conn:
-        cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO les_transactions (numero_envoyeur, numero_destinataire, montant, type_trans, code_session, etat)
+            INSERT INTO les_transactions 
+            (numero_envoyeur, numero_destinataire, montant, type_trans, code_session, etat) 
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (num_envoyeur, num_dest, montant, transaction_type, code_session, "pending"))
+        """, (num_envoyeur, num_destinataire, montant, data['transaction_type'], code_session, "pending"))
         conn.commit()
-    
+    conn.close()
+
+    confirmation_message = "Transaction en attente de confirmation"
     return {"message": confirmation_message, "code_session": code_session}
 
 #####################################
-# Endpoint de confirmation de transaction
+# Endpoint /confirm_transaction
 #####################################
 @app.post("/confirm_transaction")
-def confirm_transaction(data: dict):
-    # Récupération des données de confirmation
-    code_session = data.get('code_session')
-    confirmation = data.get('confirmation')
+async def confirm_transaction(confirmData: dict):
+    # Vérification des champs
+    required_fields = ['code_session', 'confirmation']
+    for field in required_fields:
+        if field not in confirmData:
+            raise HTTPException(status_code=400, detail=f"Le champ {field} est requis")
     
-    if not code_session or confirmation != "yes":
-        raise HTTPException(status_code=400, detail="Données de confirmation invalides")
+    if confirmData['confirmation'] != "yes":
+        raise HTTPException(status_code=400, detail="Confirmation invalide")
     
+    code_session = confirmData['code_session']
+    # Récupérer la transaction en attente par code_session
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM les_transactions WHERE code_session = ?", (code_session,))
         transaction = cursor.fetchone()
-        if not transaction:
-            raise HTTPException(status_code=404, detail="Code session invalide")
-        
-        if transaction['etat'] != "pending":
-            raise HTTPException(status_code=400, detail="Transaction déjà confirmée ou non en attente")
-        
-        # Mettre à jour l'état de la transaction de "pending" à "completed"
+    conn.close()
+    
+    if not transaction:
+        raise HTTPException(status_code=400, detail="Code session invalide")
+    if transaction['etat'] != "pending":
+        raise HTTPException(status_code=400, detail="Transaction déjà confirmée ou annulée")
+    
+    # Traiter la transaction via la fonction process_transaction
+    result, status_code = process_transaction(
+        transaction['numero_envoyeur'],
+        transaction['numero_destinataire'],
+        transaction['montant'],
+        transaction['type_trans'],
+        code_session
+    )
+    if status_code != 200:
+        raise HTTPException(status_code=status_code, detail=result.get('error'))
+    
+    # Mettre à jour l'état de la transaction à "completed"
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
         cursor.execute("UPDATE les_transactions SET etat = ? WHERE code_session = ?", ("completed", code_session))
         conn.commit()
+    conn.close()
     
-    return {"message": "Transaction confirmée avec succès"}
+    return {"message": "Transaction confirmée", "transaction_hash": result.get('transaction_hash')}
+
 
 
 
