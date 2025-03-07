@@ -189,7 +189,12 @@ def get_user_by_number(codeCompte):
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE codeCompte = ?", (codeCompte,))
         user = cursor.fetchone()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users")
+        users = cursor.fetchall()
+        logger.info("Utilisateurs {users} !")
     conn.close()
+    
     return user
 
 def update_user_balance(numero, new_balance):
@@ -672,7 +677,8 @@ async def transaction_endpoint(data: dict):
         raise HTTPException(status_code=400, detail="Tous les champs doivent être remplis.")
 
     # Récupérer l'utilisateur expéditeur
-    sender = get_user_by_number(codeCompte_req)
+    sender = get_user_by_number(str(codeCompte_req))
+    
     logger.info(f"Recherche de l'utilisateur pour {numero_envoyeur}: {sender}")
     if not sender:
         logger.error(f"Utilisateur avec le numéro {numero_envoyeur} non trouvé.")
