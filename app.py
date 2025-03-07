@@ -96,16 +96,16 @@ def init_db():
             codeCompte TEXT
           )
         ''')
-        # Table des transactions
+        # Table des les_transactions
         cursor.execute('''
-          CREATE TABLE IF NOT EXISTS transactions (
+          CREATE TABLE IF NOT EXISTS les_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             numero_envoyeur TEXT NOT NULL,
             numero_destinataire TEXT NOT NULL,
             montant REAL NOT NULL,
-            "type" TEXT NOT NULL,
+            type_trans TEXT NOT NULL,
             code_session TEXT UNIQUE NOT NULL,
-            status TEXT NOT NULL,
+            etat TEXT NOT NULL,
             transaction_hash TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
           )
@@ -218,7 +218,7 @@ def insert_transaction(numero_envoyeur, numero_destinataire, montant, transactio
     with conn:
         cursor = conn.cursor()
         cursor.execute("""
-          INSERT INTO transactions (numero_envoyeur, numero_destinataire, montant, "type", code_session, status)
+          INSERT INTO les_transactions (numero_envoyeur, numero_destinataire, montant, type_trans, code_session, etat)
           VALUES (?, ?, ?, ?, ?, ?)
         """, (numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, 'pending'))
     conn.close()
@@ -227,15 +227,15 @@ def validate_transaction(code_session):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions WHERE code_session = ? AND status = 'pending'", (code_session,))
+        cursor.execute("SELECT * FROM les_transactions WHERE code_session = ? AND etat = 'pending'", (code_session,))
         transaction = cursor.fetchone()
         if transaction:
             if is_session_expired(transaction["timestamp"]):
-                cursor.execute("UPDATE transactions SET status = 'expired' WHERE code_session = ?", (code_session,))
+                cursor.execute("UPDATE les_transactions SET etat = 'expired' WHERE code_session = ?", (code_session,))
                 conn.commit()
                 conn.close()
                 return None
-            cursor.execute("UPDATE transactions SET status = 'completed' WHERE code_session = ?", (code_session,))
+            cursor.execute("UPDATE les_transactions SET etat = 'completed' WHERE code_session = ?", (code_session,))
             conn.commit()
     conn.close()
     return transaction
@@ -277,7 +277,7 @@ def is_session_expired(timestamp_str):
     return now > expiration_time
 
 def calculate_fees(montant, transaction_type):
-    # Pour les transactions 'envoi' et 'depot', aucun frais n'est appliqué
+    # Pour les les_transactions 'envoi' et 'depot', aucun frais n'est appliqué
     if transaction_type in ['envoi', 'depot']:
         return 0
     fee = 0
@@ -319,7 +319,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         return {'message': 'Transaction de retrait réussie', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
@@ -337,7 +337,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         return {'message': 'Envoi réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
@@ -370,7 +370,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         # Insertion dans la table premium_services
@@ -396,7 +396,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         return {'message': 'Dépôt réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
@@ -419,7 +419,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         return {'message': 'Dépôt pro réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
@@ -606,14 +606,14 @@ class BalanceRequest(BaseModel):
 
 
 @app.post("/balance")
-async def balance_endpoint(data: BalanceRequest):
-    user = get_user_by_number(data.numero)
-    if user is None or user.get("pass_word") != data.pass_word:
+async def balance_endpoint(data: dict):
+    user = get_user_by_number(data.get('numero'))
+    if user is None or user['pass_word'] != data.get('pass_word'):
         raise HTTPException(
             status_code=400,
             detail="Echec de vérification de solde ou mot de passe incorrect"
         )
-    if user.get("codeCompte") is not None and data.codeCompte != user.get("codeCompte"):
+    if user["codeCompte"] is not None and data.get('codeCompte') != user["codeCompte"]:
         raise HTTPException(status_code=400, detail="codeCompte invalide")
     
     return {
@@ -622,14 +622,14 @@ async def balance_endpoint(data: BalanceRequest):
     }
 
 @app.post("/balance_pro")
-async def balance_pro_endpoint(data: BalanceRequest):
-    user = get_user_by_number(data.numero)
-    if user is None or data.pass_word != user.get("pass_word"):
+async def balance_pro_endpoint(data: dict):
+    user = get_user_by_number(data.get('numero'))
+    if user is None or data.get('pass_word') != user["pass_word"]:
         raise HTTPException(
             status_code=400,
             detail="Utilisateur non trouvé ou mot de passe incorrect"
         )
-    if user.get("codeCompte") is not None and data.codeCompte != user.get("codeCompte"):
+    if user.["codeCompte"] is not None and data.get('codeCompte') != user["codeCompte"]:
         raise HTTPException(status_code=400, detail="codeCompte invalide")
     
     conn = get_db_connection()
@@ -680,17 +680,17 @@ async def transaction_endpoint(data: dict):
 
     # Vérifier le mot de passe
     if sender['pass_word'] != pass_word:
-        logger.error(f"Mot de passe incorrect pour {numero_envoyeur}. Stocké: {sender['pass_word']} / Fourni: {pass_word}")
+        logger.error(f"Mot de passe incorrect pour {numero_envoyeur}. ")
         raise HTTPException(status_code=400, detail="Mot de passe incorrect ou utilisateur inexistant.")
 
     # Vérifier la correspondance du codeCompte si présent
-    if sender.get("codeCompte") is not None and codeCompte_req != sender.get("codeCompte"):
-        logger.error(f"CodeCompte fourni ({codeCompte_req}) ne correspond pas à celui de l'utilisateur ({sender.get('codeCompte')}).")
+    if sender.get("codeCompte") is not None and codeCompte_req != sender["codeCompte"]:
+        logger.error(f"CodeCompte fourni ({codeCompte_req}) ne correspond pas à celui de l'utilisateur.")
         raise HTTPException(status_code=400, detail="Le codeCompte fourni ne correspond pas à l'utilisateur.")
 
     # Générer le code de session et insérer la transaction en mode 'pending'
     code_session = generate_session_code()
-    #insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
+    insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session)
 
     # Récupérer le nom du destinataire pour afficher un message clair
     recipient_name = "Inconnu"
@@ -711,14 +711,14 @@ async def transaction_endpoint(data: dict):
 
 
 @app.post("/confirm_transaction")
-async def confirm_transaction_endpoint(data: ConfirmTransactionRequest):
-    code_session = data.code_session
-    confirmation = data.confirmation  # True si l'utilisateur a répondu "yes"
+async def confirm_transaction_endpoint(data: dict):
+    code_session = data.get('code_session')
+    confirmation = data.get('confirmation')  # True si l'utilisateur a répondu "yes"
 
     if not code_session:
         raise HTTPException(status_code=400, detail="Le code de session est requis.")
 
-    if not confirmation:
+    if not confirmation or confirmation != 'yes':
         raise HTTPException(status_code=400, detail="Transaction non confirmée par l'utilisateur.")
 
     transaction_data = validate_transaction(code_session)
@@ -730,7 +730,7 @@ async def confirm_transaction_endpoint(data: ConfirmTransactionRequest):
     montant = transaction_data['montant']
     transaction_type = transaction_data['type']
 
-    # Extraction d'informations supplémentaires pour les transactions 'liquider' ou 'paie'
+    # Extraction d'informations supplémentaires pour les les_transactions 'liquider' ou 'paie'
     code_paie = None
     id_paie = None
     if transaction_type in ['liquider', 'paie']:
@@ -742,7 +742,7 @@ async def confirm_transaction_endpoint(data: ConfirmTransactionRequest):
         else:
             raise HTTPException(
                 status_code=400,
-                detail="Format de num_destinataire invalide. Attendu: <numero>;<id_paie>;<code_paie>"
+                detail="Impossible de faire la transaction car les données fournis sont incorects"
             )
 
     result, status_code = process_transaction(
