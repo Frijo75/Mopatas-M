@@ -435,7 +435,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
 
 @app.get("/test")
 def test_endpoint():
-    return {"message": "Bienvenue sur Mopatas"}
+    return {"message": "Merci d'utiliser Mopatas"}
 
 #####################################
 # Endpoints
