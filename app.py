@@ -599,29 +599,92 @@ async def recup_inscription_endpoint(request: Request):
         "codeCompte": codeCompte
     }
 
-# Modèle pour les requêtes de solde
-class BalanceRequest(BaseModel):
+class MakeAgentRequest(BaseModel):
     numero: str
-    pass_word: str
+    montant: float
+    type_compte: str = "agent"
+    company_pass: str
+
+class ConfirmRequest(BaseModel):
+    code_session: str
+    confirmation: bool
+
+class BalanceRequest(BaseModel):
     codeCompte: str
+    password: str
+    numero: str
 
-
-
-@app.post("/balance")
-async def balance_endpoint(data: dict):
-    user = get_user_by_number(data.get('codeCompte'))
-    if user is None or user['pass_word'] != data.get('pass_word'):
-        raise HTTPException(
-            status_code=400,
-            detail="Echec de vérification de solde ou mot de passe incorrect"
-        )
-    if user["codeCompte"] is not None and data.get('codeCompte') != user["codeCompte"]:
-        raise HTTPException(status_code=400, detail="codeCompte invalide")
+#########################################
+# Endpoint: Création d'un agent (/makeagent)
+#########################################
+@app.post("/makeagent")
+async def make_agent_endpoint(data: MakeAgentRequest):
+    user = get_user_by_number(data.numero)
+    if not user:
+        raise HTTPException(status_code=400, detail="Numéro introuvable")
     
-    return {
-        "solde": user["solde"],
-        "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!"
-    }
+    company = get_company_account()
+    if not company or data.company_pass != company["pass_word"]:
+        raise HTTPException(status_code=400, detail="Mot de passe admin incorrect")
+    
+    nom, numero, pass_word = user["nom"], user["numero"], user["pass_word"]
+    new_balance = user["solde"] + data.montant
+
+    code_session = generate_session_code()
+    insert_pending_registration(code_session, nom, numero, pass_word, data.type_compte, new_balance, None, user["codeCompte"])
+    
+    return {"message": f"Voulez vous faire de {nom} un agent sur Mopatas ?. Confirmez avec code_session: {code_session}", "code_session": code_session}
+
+#########################################
+# Endpoint: Confirmation d'inscription (/confirm_inscription)
+#########################################
+@app.post("/confirm_agent")
+async def confirm_inscription_endpoint(data: ConfirmRequest):
+    pending = get_pending_registration(data.code_session)
+    if not pending or is_session_expired(pending["timestamp"]):
+        delete_pending_registration(data.code_session)
+        raise HTTPException(status_code=400, detail="Code session invalide ou expiré")
+
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET type_compte = ?, solde = ?, codeCompte = ? WHERE numero = ?",
+                       (pending["type_compte"], pending["solde"], pending["codeCompte"], pending["numero"]))
+    conn.close()
+
+    delete_pending_registration(data.code_session)
+    return {"detail": f"Inscription confirmée pour {pending['nom']}. Compte mis à jour."}
+
+#########################################
+# Endpoint: Liste des utilisateurs (/users)
+#########################################
+@app.get("/users")
+async def list_users(known_count: dict):
+    conn = get_db_connection()
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, nom, numero, solde, type_compte, codeCompte FROM users")
+        users = cursor.fetchall()
+    conn.close()
+
+    total_users = len(users)
+    if known_count.get('nbr') >= total_users:
+        return {"total_users": total_users, "new_users": []}
+    
+    users_list = [dict(user) for user in users]
+    users_list.sort(key=lambda x: x["id"])
+    return {"total_users": total_users, "new_users": users_list[known_count:]}
+
+#########################################
+# Endpoint: Récupérer le solde d'un utilisateur (/balance)
+#########################################
+@app.post("/balance")
+async def get_balance_endpoint(data: BalanceRequest):
+    user = get_user_by_number(data.numero)
+    if not user or user["pass_word"] != data.password or user["codeCompte"] != data.codeCompte:
+        raise HTTPException(status_code=400, detail="Identifiants incorrects")
+    
+    return {"balance": user["solde"]}
 
 @app.post("/balance_pro")
 async def balance_pro_endpoint(data: dict):
