@@ -707,7 +707,7 @@ async def get_balance_endpoint(data: BalanceRequest):
     if not user or data.password != user["pass_word"] or data.codeCompte != user["codeCompte"]:
         raise HTTPException(status_code=400, detail="Identifiants incorrects")
     
-    return {"solde": user["solde"], "message": f"Votre solde est de {user["solde"]} "}
+    return {"solde": user["solde"], "message": f"Votre solde est de {user['solde']} "}
 
 @app.post("/balance_pro")
 async def balance_pro_endpoint(data: dict):
