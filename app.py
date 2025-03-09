@@ -303,7 +303,7 @@ def calculate_fees(montant, transaction_type):
 def process_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, code_paie=None, id_paie=None):
     sender = get_user_by_number(numero_envoyeur)
     if not sender:
-        return {'error': 'Envoyeur non trouvé'}, 400
+        return {'detail': 'Utilisateur non trouvé'}, 400
 
     sender_balance = sender['solde']
     montant = float(montant)
@@ -312,8 +312,9 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
     total_debit = montant + fee
 
     if transaction_type == 'retrait':
+        recipient = get_user_by_number(numero_destinataire)
         if sender_balance < total_debit:
-            return {'error': 'Solde insuffisant pour le retrait'}, 400
+            return {'detail': 'Solde insuffisant pour le retrait'}, 400
         new_sender_balance = sender_balance - total_debit
         update_user_balance(numero_envoyeur, new_sender_balance)
         update_company_account(montant + fee)
@@ -324,11 +325,12 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
-        return {'message': 'Transaction de retrait réussie', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
+        
+        return {'detail': f'Le retrait au pres de {recipient["nom"]} effectue avec succes\nVotre solde actuel est '+ new_sender_balance}, 200
 
     elif transaction_type in ['envoi', 'paie']:
         if sender_balance < montant:
-            return {'error': 'Solde insuffisant pour l\'envoi'}, 400
+            return {'detail': 'Solde insuffisant pour l\'envoi'}, 400
         new_sender_balance = sender_balance - montant
         update_user_balance(numero_envoyeur, new_sender_balance)
         recipient = get_user_by_number(numero_destinataire)
@@ -342,26 +344,27 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
-        return {'message': 'Envoi réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
+        
+        return {'detail': f'Trasaction a {recipient["nom"]} effectue avec succes\nVotre solde actuel est '+ new_sender_balance}, 200
 
     elif transaction_type in ['liquider', 'facturer']:
         parts = numero_destinataire.split(';')
         if len(parts) < 3:
-            return {'error': 'Format invalide pour liquider/payer'}, 400
+            return {'detail': 'Format invalide pour liquider/payer'}, 400
         destinataire_phone = parts[0].strip()
         recipient = get_user_by_number(destinataire_phone)
         if not recipient:
-            return {'error': 'Destinataire non trouvé'}, 400
+            return {'detail': 'Destinataire non trouvé'}, 400
 
         code_paie_received = parts[1].strip()
         id_paie_received = parts[2].strip()
         if code_paie and code_paie != code_paie_received:
-            return {'error': 'Code de paiement invalide'}, 400
+            return {'detail': 'Code de paiement invalide'}, 400
         if id_paie and id_paie != id_paie_received:
-            return {'error': 'ID de paiement invalide'}, 400
+            return {'detail': 'ID de paiement invalide'}, 400
 
         if sender_balance < total_debit:
-            return {'error': 'Solde insuffisant pour la transaction'}, 400
+            return {'detail': 'Solde insuffisant pour la transaction'}, 400
         new_sender_balance = sender_balance - total_debit
         update_user_balance(numero_envoyeur, new_sender_balance)
         bonus = fee * 0.2
@@ -383,11 +386,12 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
                            (code_paie_received, id_paie_received, transaction_hash))
             conn.commit()
         conn.close()
-        return {'message': 'Transaction de liquider/payer réussie', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
+        
+        return {'detail': f'Paiement de facture a {recipient["nom"]} effectue avec succes\nVotre solde actuel est '+ new_sender_balance}, 200
 
     elif transaction_type == 'depot':
         if sender_balance < montant:
-            return {'error': 'Solde insuffisant pour le dépôt'}, 400
+            return {'detail': 'Solde insuffisant pour le dépôt'}, 400
         new_sender_balance = sender_balance - montant
         update_user_balance(numero_envoyeur, new_sender_balance)
         recipient = get_user_by_number(numero_destinataire)
@@ -401,11 +405,12 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
-        return {'message': 'Dépôt réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
+        
+        return {'detail': f'Le depot a {recipient["nom"]} a ete effectue avec succes\nVotre solde actuel est '+ new_sender_balance}, 200
 
     elif transaction_type == 'depot_pro':
         if sender['type_compte'] not in ['agent', 'premium']:
-            return {'error': 'Le compte de l\'envoyeur n\'est pas un agent valide pour depot_pro'}, 400
+            return {'detail': 'Le compte de l\'envoyeur n\'est pas un agent valide pour depot_pro'}, 400
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
@@ -413,7 +418,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             company = cursor.fetchone()
         conn.close()
         if not company or company["solde"] < montant:
-            return {'error': 'Fonds insuffisants dans le compte d\'entreprise pour le dépôt pro'}, 400
+            return {'detail': 'Fonds insuffisants dans le compte d\'entreprise pour le dépôt pro'}, 400
         update_company_account(-montant)
         new_sender_balance = sender_balance + montant
         update_user_balance(numero_envoyeur, new_sender_balance)
@@ -424,10 +429,11 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
             cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
             conn.commit()
         conn.close()
-        return {'message': 'Dépôt pro réussi', 'new_balance': new_sender_balance, 'transaction_hash': transaction_hash}, 200
+        
+        return {'detail': f'Envoi d\'agent a : {recipient["nom"]} effectue avec succes\nVotre solde actuel est '+ new_sender_balance}, 200
 
     else:
-        return {'error': 'Type de transaction inconnu'}, 400
+        return {'detail': 'Type de transaction inconnu'}, 400
 
 #####################################
 # Endpoints FastAPI
@@ -610,9 +616,11 @@ class ConfirmRequest(BaseModel):
     confirmation: bool
 
 class BalanceRequest(BaseModel):
-    codeCompte: str
-    password: str
     numero: str
+    password: str = None
+    codeCompte: str = None
+    company_pass: str = None  # Ajout de ce champ
+
 
 #########################################
 # Endpoint: Création d'un agent (/makeagent)
@@ -680,11 +688,26 @@ async def list_users(known_count: dict):
 #########################################
 @app.post("/balance")
 async def get_balance_endpoint(data: BalanceRequest):
+    """
+    Vérifie si `company_pass` est correct. Si oui, retourne le solde sans vérifier `password` et `codeCompte`.
+    Sinon, vérifie normalement les identifiants utilisateur.
+    """
+    company = get_company_account()
+    
+    # Vérification du mot de passe admin
+    if data.company_pass and company and data.company_pass == company["pass_word"]:
+        user = get_user_by_number(data.numero)
+        if not user:
+            raise HTTPException(status_code=400, detail="Utilisateur introuvable")
+        
+        return {"solde": user["solde"]}  # Retourne directement le solde
+    
+    # Si `company_pass` est absent ou incorrect, vérification normale
     user = get_user_by_number(data.numero)
-    if not user or user["pass_word"] != data.password or user["codeCompte"] != data.codeCompte:
+    if not user or data.password != user["pass_word"] or data.codeCompte != user["codeCompte"]:
         raise HTTPException(status_code=400, detail="Identifiants incorrects")
     
-    return {"balance": user["solde"]}
+    return {"solde": user["solde"], "message": f"Votre solde est de {user["solde"]} "}
 
 @app.post("/balance_pro")
 async def balance_pro_endpoint(data: dict):
@@ -823,7 +846,7 @@ async def confirm_transaction(confirmData: dict):
         code_session
     )
     if status_code != 200:
-        raise HTTPException(status_code=status_code, detail=result.get('error'))
+        raise HTTPException(status_code=status_code, detail=result.get('detail'))
     
     # Mettre à jour l'état de la transaction à "completed"
     conn = get_db_connection()
@@ -833,7 +856,7 @@ async def confirm_transaction(confirmData: dict):
         conn.commit()
     conn.close()
     
-    return {"message": "Transaction confirmée", "transaction_hash": result.get('transaction_hash')}
+    return {"detail": result.get('detail'), "message": "Transaction confirmee", "transaction_hash": result.get('transaction_hash')}
 
 
 
