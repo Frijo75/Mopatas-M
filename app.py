@@ -682,12 +682,14 @@ async def list_users(data: dict):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, nom, numero, solde, type_compte, codeCompte FROM users")
+        cursor.execute("SELECT nom, numero, solde, type_compte FROM users")
         users = cursor.fetchall()
-
-    # Convertir les résultats en liste de dictionnaires
-    users_list = [dict(user) for user in users]
-    return {"total_users": len(users_list), "users": users_list}
+    if users :
+        # Convertir les résultats en liste de dictionnaires
+        users_list = [dict(user) for user in users]
+        return {"total_users": len(users_list), "users": users_list}
+    else :
+        raise HTTPException(status_code=403, detail="Aucun utilisateur disponible !")
 
 
 #########################################
