@@ -668,29 +668,29 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
 #########################################
 
 
-class UserRequest(BaseModel):
-    nbr: int  # Paramètre attendu dans le body
 
+# Modèle Pydantic pour la demande de validation du mot de passe
+class CompanyPassRequest(BaseModel):
+    company_pass: str
 
 @app.post("/users")
-async def list_users(request: UserRequest):
+async def list_users(request: CompanyPassRequest):
+    # Vérifier si le mot de passe est correct
+    company = get_company_account()
+
+    if not company or company["company_pass"] != request.company_pass:
+        raise HTTPException(status_code=403, detail="Accès refusé, mot de passe incorrect.")
+
+    # Si l'accès est autorisé, récupérer la liste des utilisateurs
     conn = get_db_connection()
-   
     with conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, nom, numero, solde, type_compte, codeCompte FROM users")
         users = cursor.fetchall()
-    conn.close()
 
-    total_users = len(users)
-
-    if request.nbr >= total_users:
-        return {"total_users": total_users, "new_users": []}
-
-    users_list = [dict(user) for user in users]  # Convertir en liste de dictionnaires
-    users_list.sort(key=lambda x: x["id"])  # Tri par ID
-
-    return {"total_users": total_users, "new_users": users_list[request.nbr:]}
+    # Convertir les résultats en liste de dictionnaires
+    users_list = [dict(user) for user in users]
+    return {"total_users": len(users_list), "users": users_list}
 
 
 #########################################
