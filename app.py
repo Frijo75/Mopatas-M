@@ -666,9 +666,16 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
 #########################################
 # Endpoint: Liste des utilisateurs (/users)
 #########################################
-@app.get("/users")
-async def list_users(known_count: dict):
+
+
+class UserRequest(BaseModel):
+    nbr: int  # Paramètre attendu dans le body
+
+
+@app.post("/users")
+async def list_users(request: UserRequest):
     conn = get_db_connection()
+   
     with conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, nom, numero, solde, type_compte, codeCompte FROM users")
@@ -676,12 +683,15 @@ async def list_users(known_count: dict):
     conn.close()
 
     total_users = len(users)
-    if known_count.get('nbr') >= total_users:
+
+    if request.nbr >= total_users:
         return {"total_users": total_users, "new_users": []}
-    
-    users_list = [dict(user) for user in users]
-    users_list.sort(key=lambda x: x["id"])
-    return {"total_users": total_users, "new_users": users_list[known_count:]}
+
+    users_list = [dict(user) for user in users]  # Convertir en liste de dictionnaires
+    users_list.sort(key=lambda x: x["id"])  # Tri par ID
+
+    return {"total_users": total_users, "new_users": users_list[request.nbr:]}
+
 
 #########################################
 # Endpoint: Récupérer le solde d'un utilisateur (/balance)
