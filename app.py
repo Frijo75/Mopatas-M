@@ -669,16 +669,13 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
 
 
 
-# Modèle Pydantic pour la demande de validation du mot de passe
-class CompanyPassRequest(BaseModel):
-    company_pass: str
 
 @app.post("/users")
-async def list_users(request: CompanyPassRequest):
+async def list_users(data: dict):
     # Vérifier si le mot de passe est correct
     company = get_company_account()
 
-    if not company or company["company_pass"] != request.company_pass:
+    if not company or company["company_pass"] != data.get("company_pass"):
         raise HTTPException(status_code=403, detail="Accès refusé, mot de passe incorrect.")
 
     # Si l'accès est autorisé, récupérer la liste des utilisateurs
