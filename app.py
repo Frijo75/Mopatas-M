@@ -718,41 +718,45 @@ async def get_balance_endpoint(data: BalanceRequest):
     
     return {"solde": user["solde"], "message": f"Votre solde est de {user['solde']} "}
 
+
+class BalanceProRequest(BaseModel):
+    numero: str
+    pass_word: str
+    codeCompte: str | None = None
+
 @app.post("/balance_pro")
-async def balance_pro_endpoint(data: dict):
-    user = get_user_by_number(data.get('numero'))
-    if user is None or data.get('pass_word') != user["pass_word"]:
+async def balance_pro_endpoint(data: BalanceProRequest):
+    user = get_user_by_number(data.numero)
+    if user is None or data.pass_word != user["pass_word"]:
         raise HTTPException(
             status_code=400,
             detail="Utilisateur non trouvé ou mot de passe incorrect"
         )
-    if user["codeCompte"] is not None and data.get('codeCompte') != user["codeCompte"]:
+    if user["codeCompte"] is not None and data.codeCompte != user["codeCompte"]:
         raise HTTPException(status_code=400, detail="codeCompte invalide")
-    
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("""
-       SELECT 
-        p.id_paiement AS paiement_id, 
-        u.nom AS nom_payeur, 
-        t.montant AS montant_transfere, 
-        t.transaction_hash
-    FROM 
-        premium_services AS p
-    INNER JOIN 
-        users AS u ON u.numero = p.id_payeur
-    INNER JOIN 
-        les_transactions AS t ON t.id = p.id_paiement
-    WHERE 
-        p.id_payeur = ?
-        AND t.etat = 'completed'
-
+        SELECT 
+            p.id_paiement AS paiement_id, 
+            u.nom AS nom_payeur, 
+            t.montant AS montant_transfere, 
+            t.transaction_hash
+        FROM 
+            premium_services AS p
+        INNER JOIN 
+            users AS u ON u.numero = p.id_payeur
+        INNER JOIN 
+            les_transactions AS t ON t.id = p.id_paiement
+        WHERE 
+            p.id_payeur = ?
+            AND t.etat = 'completed'
     """, (user['numero'],))
     
     premium_services = cursor.fetchall()
     conn.close()
-    
+
     premium_list = [
         {
             "code_transaction": row["transaction_hash"],
@@ -761,7 +765,7 @@ async def balance_pro_endpoint(data: dict):
         }
         for row in premium_services
     ]
-    
+
     return {
         "solde": user["solde"],
         "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!",
