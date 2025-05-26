@@ -12,6 +12,9 @@ from typing import Union, Tuple, List
 import re
 import random
 import string
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -61,15 +64,20 @@ def validate_phone(numero: str):
 #####################################
 # Base de données SQLite et initialisation
 #####################################
+
 def get_db_connection():
-    DATABASE = os.path.join(os.getcwd(), "mopatas.db")
-    logger.info(f"Database path: {DATABASE}")
     try:
-        conn = sqlite3.connect(DATABASE)
-        conn.row_factory = sqlite3.Row
+        conn = psycopg2.connect(
+            host="dpg-d0nitoumcj7s73e2giag-a.oregon-postgres.render.com",
+            database="kelasi_db",
+            user="kelasi_db_user",
+            password="gTBHYLXoOf5F5iCQvIzAmL1CCJYMpHCd",
+            port=5432,
+            cursor_factory=RealDictCursor  # Permet de retourner les résultats comme un dictionnaire
+        )
         return conn
-    except sqlite3.Error as e:
-        logger.error(f"Erreur SQLite: {e}")
+    except psycopg2.Error as e:
+        logger.error(f"Erreur PostgreSQL: {e}")
         raise HTTPException(status_code=500, detail="Connexion à la base de données échouée")
 
 def get_company_account():
@@ -87,7 +95,7 @@ def init_db():
         # Table des utilisateurs
         cursor.execute('''
           CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             nom TEXT NOT NULL,
             numero TEXT UNIQUE NOT NULL,
             pass_word TEXT NOT NULL,
@@ -96,10 +104,10 @@ def init_db():
             codeCompte TEXT
           )
         ''')
-        # Table des les_transactions
+        # Table des transactions
         cursor.execute('''
           CREATE TABLE IF NOT EXISTS les_transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             numero_envoyeur TEXT NOT NULL,
             numero_destinataire TEXT NOT NULL,
             montant REAL NOT NULL,
@@ -107,13 +115,13 @@ def init_db():
             code_session TEXT UNIQUE NOT NULL,
             etat TEXT NOT NULL,
             transaction_hash TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         ''')
         # Table des inscriptions en attente
         cursor.execute('''
           CREATE TABLE IF NOT EXISTS pending_registrations (
-             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             id SERIAL PRIMARY KEY,
              code_session TEXT UNIQUE NOT NULL,
              nom TEXT NOT NULL,
              numero TEXT NOT NULL,
@@ -122,13 +130,13 @@ def init_db():
              solde REAL NOT NULL,
              code_entite TEXT,
              codeCompte TEXT,
-             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         ''')
         # Table du compte d'entreprise
         cursor.execute('''
           CREATE TABLE IF NOT EXISTS company_account (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             solde REAL NOT NULL,
             pass_word TEXT NOT NULL
           )
@@ -136,12 +144,14 @@ def init_db():
         # Table premium_services
         cursor.execute('''
           CREATE TABLE IF NOT EXISTS premium_services (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_paiement TEXT NOT NULL,
-            id_payeur TEXT NOT NULL,
+            id SERIAL PRIMARY KEY,
+            client TEXT NOT NULL, 
+            produit TEXT NOT NULL, 
+            percepteur TEXT NOT NULL,
             transaction_hash TEXT NOT NULL
           )
         ''')
+
         # Insertion du compte d'entreprise s'il n'existe pas
         cursor.execute("SELECT COUNT(*) as count FROM company_account")
         row = cursor.fetchone()
@@ -156,9 +166,11 @@ def init_db():
             else:
                 company_solde = 2000000.0
                 company_password = "adminpassword"
-            cursor.execute("INSERT INTO company_account (solde, pass_word) VALUES (?, ?)", 
+            cursor.execute("INSERT INTO company_account (solde, pass_word) VALUES (%s, %s)", 
                            (company_solde, company_password))
+        conn.commit()
     conn.close()
+
 
 #####################################
 # Fonctions utilitaires SQL
@@ -170,14 +182,14 @@ def insert_user(nom, numero, pass_word, type_compte="standard", solde=0.0, codeC
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO users (nom, numero, pass_word, solde, type_compte, codeCompte)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (nom, numero, pass_word, solde, type_compte, codeCompte))
             logger.info("Utilisateur enregistré avec succès !")
             return True
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
         logger.error("Erreur : Le numéro est déjà utilisé.")
         return False
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Erreur SQLite : {e}")
         return False
     finally:
@@ -187,9 +199,8 @@ def get_user_by_number(codeCompte):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE numero = ?", (codeCompte,))
+        cursor.execute("SELECT * FROM users WHERE numero = %s", (codeCompte,))
         user = cursor.fetchone()
-        cursor = conn.cursor()
     conn.close()
     
     return user
@@ -198,21 +209,21 @@ def update_user_balance(numero, new_balance):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET solde = ? WHERE numero = ?", (new_balance, numero))
+        cursor.execute("UPDATE users SET solde = %s WHERE numero = %s", (new_balance, numero))
     conn.close()
 
 def update_user_code(numero, codeCompte):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET codeCompte = ? WHERE numero = ?", (codeCompte, numero))
+        cursor.execute("UPDATE users SET codeCompte = %s WHERE numero = %s", (codeCompte, numero))
     conn.close()
 
 def update_company_account(amount):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE company_account SET solde = solde + ? WHERE id = 1", (amount,))
+        cursor.execute("UPDATE company_account SET solde = solde + %s WHERE id = 1", (amount,))
     conn.close()
 
 def insert_transaction(numero_envoyeur, numero_destinataire, montant, transaction_type, code_session):
@@ -221,7 +232,7 @@ def insert_transaction(numero_envoyeur, numero_destinataire, montant, transactio
         cursor = conn.cursor()
         cursor.execute("""
           INSERT INTO les_transactions (numero_envoyeur, numero_destinataire, montant, type_trans, code_session, etat)
-          VALUES (?, ?, ?, ?, ?, ?)
+          VALUES (%s, %s, %s, %s, %s, %s)
         """, (numero_envoyeur, numero_destinataire, montant, transaction_type, code_session, 'pending'))
     conn.close()
 
@@ -229,15 +240,15 @@ def validate_transaction(code_session):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM les_transactions WHERE code_session = ? AND etat = 'pending'", (code_session,))
+        cursor.execute("SELECT * FROM les_transactions WHERE code_session = %s AND etat = 'pending'", (code_session,))
         transaction = cursor.fetchone()
         if transaction:
             if is_session_expired(transaction["timestamp"]):
-                cursor.execute("UPDATE les_transactions SET etat = 'expired' WHERE code_session = ?", (code_session,))
+                cursor.execute("UPDATE les_transactions SET etat = 'expired' WHERE code_session = %s", (code_session,))
                 conn.commit()
                 conn.close()
                 return None
-            cursor.execute("UPDATE les_transactions SET etat = 'completed' WHERE code_session = ?", (code_session,))
+            cursor.execute("UPDATE les_transactions SET etat = 'completed' WHERE code_session = %s", (code_session,))
             conn.commit()
     conn.close()
     return transaction
@@ -246,7 +257,7 @@ def insert_pending_registration(code_session, nom, numero, pass_word, type_compt
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO pending_registrations (code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        cursor.execute("INSERT INTO pending_registrations (code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                        (code_session, nom, numero, pass_word, type_compte, solde, code_entite, codeCompte))
     conn.close()
 
@@ -254,7 +265,7 @@ def get_pending_registration(code_session):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM pending_registrations WHERE code_session = ?", (code_session,))
+        cursor.execute("SELECT * FROM pending_registrations WHERE code_session = %s", (code_session,))
         pending = cursor.fetchone()
     conn.close()
     return pending
@@ -263,7 +274,7 @@ def delete_pending_registration(code_session):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM pending_registrations WHERE code_session = ?", (code_session,))
+        cursor.execute("DELETE FROM pending_registrations WHERE code_session = %s", (code_session,))
     conn.commit()
     conn.close()
 
@@ -322,7 +333,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = %s WHERE code_session = %s", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         
@@ -341,7 +352,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = %s WHERE code_session = %s", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         
@@ -349,45 +360,55 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
 
     elif transaction_type in ['liquider', 'facturer']:
         parts = numero_destinataire.split(';')
-        if len(parts) < 3:
+        if len(parts) < 4:
             return {'detail': 'Format invalide pour liquider/payer'}, 400
+
         destinataire_phone = parts[0].strip()
         recipient = get_user_by_number(destinataire_phone)
+
         if not recipient:
             return {'detail': 'Destinataire non trouvé'}, 400
 
-        code_paie_received = parts[1].strip()
-        id_paie_received = parts[2].strip()
-        if code_paie and code_paie != code_paie_received:
-            return {'detail': 'Code de paiement invalide'}, 400
-        if id_paie and id_paie != id_paie_received:
-            return {'detail': 'ID de paiement invalide'}, 400
+        client = parts[1].strip()
+        produit = parts[2].strip()
+        percepteur = parts[3].strip()
 
-        if sender_balance < total_debit:
-            return {'detail': 'Solde insuffisant pour la transaction'}, 400
         new_sender_balance = sender_balance - total_debit
         update_user_balance(numero_envoyeur, new_sender_balance)
+
         bonus = fee * 0.2
         new_recipient_balance = recipient['solde'] + bonus
         update_user_balance(destinataire_phone, new_recipient_balance)
+
         update_company_account(fee - bonus)
+
         transaction_hash = str(uuid.uuid4())
+
+        # Mise à jour de la transaction
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute(
+                "UPDATE les_transactions SET transaction_hash = %s WHERE code_session = %s",
+                (transaction_hash, code_session)
+            )
             conn.commit()
         conn.close()
-        # Insertion dans la table premium_services
+
+        # Insertion dans premium_services
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO premium_services (id_paiement, id_payeur, transaction_hash) VALUES (?, ?, ?)",
-                           (code_paie_received, id_paie_received, transaction_hash))
+            cursor.execute("""
+                INSERT INTO premium_services (client, produit, percepteur, transaction_hash)
+                VALUES (%s, %s, %s, %s)
+            """, (client, produit, percepteur, transaction_hash))
             conn.commit()
         conn.close()
-        
-        return {'detail': f'Paiement de facture a {recipient["nom"]} effectue avec succes\nVotre solde actuel est '+ new_sender_balance}, 200
+
+        return {
+            'detail': f"Paiement de facture à {recipient['nom']} effectué avec succès\nVotre solde actuel est {new_sender_balance:.2f}"
+        }, 200
 
     elif transaction_type == 'depot':
         if sender_balance < montant:
@@ -402,7 +423,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = %s WHERE code_session = %s", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         
@@ -426,7 +447,7 @@ def process_transaction(numero_envoyeur, numero_destinataire, montant, transacti
         conn = get_db_connection()
         with conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE les_transactions SET transaction_hash = ? WHERE code_session = ?", (transaction_hash, code_session))
+            cursor.execute("UPDATE les_transactions SET transaction_hash = %s WHERE code_session = %s", (transaction_hash, code_session))
             conn.commit()
         conn.close()
         
@@ -602,6 +623,8 @@ async def recup_inscription_endpoint(request: Request):
     return {
         "message": "Compte mis à jour avec succès",
         "numero": numero,
+        "nom":user['pass_word'],
+        "solde":user['solde'],
         "codeCompte": codeCompte
     }
 
@@ -611,7 +634,7 @@ class MakeAgentRequest(BaseModel):
     type_compte: str = "agent"
     company_pass: str
 
-class ConfirmRequest(BaseModel):
+class ConfirmRequestAgent(BaseModel):
     code_session: str
     confirmation: bool
 
@@ -641,13 +664,13 @@ async def make_agent_endpoint(data: MakeAgentRequest):
     code_session = generate_session_code()
     insert_pending_registration(code_session, nom, numero, pass_word, data.type_compte, new_balance, None, user["codeCompte"])
     
-    return {"message": f"Voulez vous faire de {nom} un agent sur Mopatas ?. Confirmez avec code_session: {code_session}", "code_session": code_session}
+    return {"message": f"Voulez vous faire de {nom} un agent sur Mopatas %s. Confirmez avec code_session: {code_session}", "code_session": code_session}
 
 #########################################
 # Endpoint: Confirmation d'inscription (/confirm_inscription)
 #########################################
 @app.post("/confirm_agent")
-async def confirm_inscription_endpoint(data: ConfirmRequest):
+async def confirm_inscription_endpoint(data: ConfirmRequestAgent):
     pending = get_pending_registration(data.code_session)
     if not pending or is_session_expired(pending["timestamp"]):
         delete_pending_registration(data.code_session)
@@ -656,7 +679,7 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET type_compte = ?, solde = ?, codeCompte = ? WHERE numero = ?",
+        cursor.execute("UPDATE users SET type_compte = %s, solde = %s, codeCompte = %s WHERE numero = %s",
                        (pending["type_compte"], pending["solde"], pending["codeCompte"], pending["numero"]))
     conn.close()
 
@@ -718,31 +741,29 @@ async def get_balance_endpoint(data: BalanceRequest):
     
     return {"solde": user["solde"], "message": f"Votre solde est de {user['solde']} "}
 
-
-class BalanceProRequest(BaseModel):
-    numero: str
-    pass_word: str
-    codeCompte: str | None = None
-
 @app.post("/balance_pro")
-async def balance_pro_endpoint(data: BalanceProRequest):
-    user = get_user_by_number(data.numero)
-    if user is None or data.pass_word != user["pass_word"]:
+async def balance_pro_endpoint(data: dict):
+    user = get_user_by_number(data.get('numero'))
+    if user is None or data.get('pass_word') != user["pass_word"]:
         raise HTTPException(
             status_code=400,
             detail="Utilisateur non trouvé ou mot de passe incorrect"
         )
-    if user["codeCompte"] is not None and data.codeCompte != user["codeCompte"]:
+    if user["codeCompte"] is not None and data.get('codeCompte') != user["codeCompte"]:
         raise HTTPException(status_code=400, detail="codeCompte invalide")
-
+    
     conn = get_db_connection()
     cursor = conn.cursor()
+    
     cursor.execute("""
-        SELECT 
+           SELECT 
             p.id_paiement AS paiement_id, 
             u.nom AS nom_payeur, 
             t.montant AS montant_transfere, 
-            t.transaction_hash
+            t.transaction_hash,
+            p.client,
+            p.percepteur,
+            p.produit
         FROM 
             premium_services AS p
         INNER JOIN 
@@ -750,22 +771,26 @@ async def balance_pro_endpoint(data: BalanceProRequest):
         INNER JOIN 
             les_transactions AS t ON t.id = p.id_paiement
         WHERE 
-            p.id_payeur = ?
+            p.id_payeur = %s
             AND t.etat = 'completed'
-    """, (user['numero'],))
+            """, (user['numero'],))
+
     
     premium_services = cursor.fetchall()
     conn.close()
-
+    
     premium_list = [
         {
             "code_transaction": row["transaction_hash"],
-            "nom_payeur": row["nom_payeur"],
+            "client": row["client"],
+            "percepteur": row["percepteur"],
+            "produit": row["produit"],
             "montant": row["montant_transfere"]
         }
         for row in premium_services
     ]
 
+    
     return {
         "solde": user["solde"],
         "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!",
@@ -804,13 +829,12 @@ async def create_transaction(data: dict):
     # Vérifier le destinataire : si le numéro contient ';' on découpe et on prend la première partie
     num_destinataire = data['num_destinataire']
     if ";" in num_destinataire:
-        parts = num_destinataire.split(";")
-        numero_dest = parts[0].strip()
+        numero_dest = num_destinataire.split(';')[0].strip()
     else:
         numero_dest = num_destinataire.strip()
-    
-    # Vérifier que le destinataire existe dans la base de données
+
     recipient = get_user_by_number(numero_dest)
+
     if not recipient:
         raise HTTPException(status_code=400, detail="Destinataire non trouvé")
     
@@ -829,7 +853,7 @@ async def create_transaction(data: dict):
         cursor.execute("""
             INSERT INTO les_transactions 
             (numero_envoyeur, numero_destinataire, montant, type_trans, code_session, etat) 
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (num_envoyeur, num_destinataire, montant, data['transaction_type'], code_session, "pending"))
         conn.commit()
     conn.close()
@@ -856,7 +880,7 @@ async def confirm_transaction(confirmData: dict):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM les_transactions WHERE code_session = ?", (code_session,))
+        cursor.execute("SELECT * FROM les_transactions WHERE code_session = %s", (code_session,))
         transaction = cursor.fetchone()
     conn.close()
     
@@ -880,13 +904,15 @@ async def confirm_transaction(confirmData: dict):
     conn = get_db_connection()
     with conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE les_transactions SET etat = ? WHERE code_session = ?", ("completed", code_session))
+        cursor.execute("UPDATE les_transactions SET etat = %s WHERE code_session = %s", ("completed", code_session))
         conn.commit()
     conn.close()
     
     return {"detail": result.get('detail'), "message": "Transaction confirmee", "transaction_hash": result.get('transaction_hash')}
 
-
+@app.on_event("startup")
+def startup_event():
+    init_db()
 
 
 if __name__ == "__main__":
