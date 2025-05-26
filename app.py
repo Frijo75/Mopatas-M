@@ -558,6 +558,7 @@ class ConfirmRequest(BaseModel):
 @app.post("/confirm_inscription")
 async def confirm_inscription_endpoint(data: ConfirmRequest):
     try:
+        print(f"{data}")
         logger.info(f"Requête inscription reçue: {data.dict()}")
         code_session = data.code_session
         confirmation = data.confirmation
@@ -606,8 +607,8 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
 
 # 3. Recup_inscription : Récupérer un utilisateur et mettre à jour son codeCompte
 @app.post("/recup_inscription")
-async def recup_inscription_endpoint(request: Request):
-    data = await request.json()
+async def recup_inscription_endpoint(data: Request):
+   
     numero = data.get('numero')
     pass_word = data.get('pass_word')
     codeCompte = data.get('codeCompte')
@@ -671,6 +672,7 @@ async def make_agent_endpoint(data: MakeAgentRequest):
 #########################################
 @app.post("/confirm_agent")
 async def confirm_inscription_endpoint(data: ConfirmRequestAgent):
+    print(f"{data}")
     pending = get_pending_registration(data.code_session)
     if not pending or is_session_expired(pending["timestamp"]):
         delete_pending_registration(data.code_session)
@@ -695,6 +697,7 @@ async def confirm_inscription_endpoint(data: ConfirmRequestAgent):
 
 @app.post("/users")
 async def list_users(data: dict):
+    print(f"{data}")
     # Vérifier si le mot de passe est correct
     company = get_company_account()
 
@@ -744,6 +747,7 @@ async def get_balance_endpoint(data: BalanceRequest):
 @app.post("/balance_pro")
 async def balance_pro_endpoint(data: dict):
     user = get_user_by_number(data.get('numero'))
+    print(f"{data}")
     if user is None or data.get('pass_word') != user["pass_word"]:
         raise HTTPException(
             status_code=400,
@@ -910,9 +914,7 @@ async def confirm_transaction(confirmData: dict):
     
     return {"detail": result.get('detail'), "message": "Transaction confirmee", "transaction_hash": result.get('transaction_hash')}
 
-@app.on_event("startup")
-def startup_event():
-    init_db()
+
 
 
 if __name__ == "__main__":
