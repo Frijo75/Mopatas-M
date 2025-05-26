@@ -278,16 +278,16 @@ def delete_pending_registration(code_session):
     conn.commit()
     conn.close()
 
-def is_session_expired(timestamp_str):
+def is_session_expired(timestamp):
     try:
-        session_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+        # Pas besoin de parser, on suppose que c'est déjà un datetime
+        if not isinstance(timestamp, datetime):
+            timestamp = datetime.strptime(str(timestamp), "%Y-%m-%d %H:%M:%S.%f")
+        return datetime.now() - timestamp > timedelta(minutes=15)
     except Exception as e:
-        logger.error(f"Erreur de conversion du timestamp '{timestamp_str}': {e}")
+        logger.error(f"Erreur de conversion du timestamp '{timestamp}': {e}")
         raise HTTPException(status_code=500, detail="Erreur lors de la conversion du timestamp")
-    now = datetime.utcnow()  # Utilisation de l'heure UTC pour la cohérence
-    expiration_time = session_time + timedelta(minutes=10)
-    logger.info(f"Session time: {session_time}, Expiration time: {expiration_time}, Now: {now}")
-    return now > expiration_time
+
 
 def calculate_fees(montant, transaction_type):
     # Pour les les_transactions 'envoi' et 'depot', aucun frais n'est appliqué
