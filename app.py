@@ -731,27 +731,32 @@ async def balance_pro_endpoint(data: dict):
     
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id_paiement, id_payeur FROM premium_services WHERE id_payeur = ?",
-        (user['numero'],)
-    )
+    
+    cursor.execute("""
+        SELECT p.id_paiement, u.nom as nom_payeur
+        FROM premium_services p
+        JOIN users u ON u.numero = p.id_payeur
+        WHERE p.id_payeur = ?
+    """, (user['numero'],))
+    
     premium_services = cursor.fetchall()
     conn.close()
     
     premium_list = [
         {
             "id_paiement": row["id_paiement"],
-            "id_payeur": row["id_payeur"]
-          
+            "nom_payeur": row["nom_payeur"]
         }
         for row in premium_services
     ]
     
     return {
-         "solde": user["solde"],
-         "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!",
-         "premium_services": premium_list
+        "solde": user["solde"],
+        "message": f"Bonjour {user['nom']}, votre solde est de {user['solde']}!",
+        "premium_services": premium_list
     }
+
+
     
 
 #####################################
