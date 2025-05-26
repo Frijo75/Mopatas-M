@@ -733,10 +733,21 @@ async def balance_pro_endpoint(data: dict):
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT p.id_paiement, u.nom as nom_payeur
-        FROM premium_services p
-        JOIN users u ON u.numero = p.id_payeur
-        WHERE p.id_payeur = ?
+       SELECT 
+        p.id_paiement AS paiement_id, 
+        u.nom AS nom_payeur, 
+        t.montant AS montant_transfere, 
+        t.transaction_hash
+    FROM 
+        premium_services AS p
+    INNER JOIN 
+        users AS u ON u.numero = p.id_payeur
+    INNER JOIN 
+        les_transactions AS t ON t.id = p.id_paiement
+    WHERE 
+        p.id_payeur = ?
+        AND t.etat = 'completed'
+
     """, (user['numero'],))
     
     premium_services = cursor.fetchall()
@@ -744,8 +755,9 @@ async def balance_pro_endpoint(data: dict):
     
     premium_list = [
         {
-            "id_paiement": row["id_paiement"],
-            "nom_payeur": row["nom_payeur"]
+            "code_transaction": row["transaction_hash"],
+            "nom_payeur": row["nom_payeur"],
+            "montant": row["montant_transfere"]
         }
         for row in premium_services
     ]
@@ -756,8 +768,6 @@ async def balance_pro_endpoint(data: dict):
         "premium_services": premium_list
     }
 
-
-    
 
 #####################################
 # Endpoint de création de transaction
