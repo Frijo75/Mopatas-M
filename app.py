@@ -544,6 +544,7 @@ class ConfirmTransactionRequest(BaseModel):
 
 class ConfirmRequest(BaseModel):
     code_session: str
+    codeCompte: str
     confirmation: Union[bool, str]
 
     @validator("confirmation", pre=True)
@@ -558,10 +559,10 @@ class ConfirmRequest(BaseModel):
 @app.post("/confirm_inscription")
 async def confirm_inscription_endpoint(data: ConfirmRequest):
     try:
-        print(f"{data}")
         logger.info(f"Requête inscription reçue: {data.dict()}")
         code_session = data.code_session
         confirmation = data.confirmation
+        codeCompte   = data.codeCompte
 
         if not confirmation:
             raise HTTPException(status_code=400, detail="La confirmation doit être vraie")
@@ -576,8 +577,11 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
             raise HTTPException(status_code=400, detail="Code de session expiré")
         
         # Pour un agent, codeCompte doit être None, sinon on le récupère depuis pending.
-        codeCompte = None if pending["type_compte"] == "agent" else pending["codeCompte"]
-        
+        if pending["type_compte"] == "agent":
+            codeCompte = None
+        else:
+            codeCompte = data.codeCompte or pending["codeCompte"]
+
         # Insertion dans la table users (on suppose que insert_user gère aussi les erreurs)
         insert_user(
             pending["nom"],
@@ -602,6 +606,7 @@ async def confirm_inscription_endpoint(data: ConfirmRequest):
     except Exception as e:
         logger.error(f"Erreur lors de la confirmation de l'inscription: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
